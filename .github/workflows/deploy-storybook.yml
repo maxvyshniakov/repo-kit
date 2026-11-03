@@ -1,0 +1,60 @@
+# Reusable: builds Storybook and publishes it to its private Cloudflare host.
+# The caller decides when (main pushes and dispatches) and after which jobs:
+#
+#   jobs:
+#     deploy:
+#       needs: [check, browser]
+#       if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+#       uses: maxvyshniakov/repo-kit/.github/workflows/deploy-storybook.yml@v0.1.0
+#       with:
+#         url: https://sid-kit.maxvyshniakov.com
+#       secrets:
+#         cloudflare-api-token: ${{ secrets.STORYBOOK_CLOUDFLARE_API_TOKEN }}
+#
+# The caller grants contents: read and packages: read.
+name: deploy-storybook
+on:
+  workflow_call:
+    inputs:
+      url:
+        type: string
+        required: true
+      environment:
+        type: string
+        default: storybook
+      runner:
+        description: runs-on, as JSON.
+        type: string
+        default: '["self-hosted", "homelab"]'
+      timeout-minutes:
+        type: number
+        default: 20
+    secrets:
+      cloudflare-api-token:
+        required: true
+jobs:
+  deploy:
+    name: Publish private Storybook
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+      packages: read
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ inputs.url }}
+    env:
+      STORYBOOK_DISABLE_TELEMETRY: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.1.0
+      - run: bun run build
+      - run: bun run storybook:build
+      - run: bun run storybook:prepare-deploy
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - run: bun run storybook:deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.cloudflare-api-token }}

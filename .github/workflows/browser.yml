@@ -1,0 +1,58 @@
+# Reusable: browser checks against a static Storybook build, one job per check.
+#
+#   jobs:
+#     browser:
+#       uses: maxvyshniakov/repo-kit/.github/workflows/browser.yml@v0.1.0
+#       with:
+#         checks: >-
+#           [{"name": "stories", "run": "bun run check:stories -- --no-build"}]
+#
+# The caller grants contents: read and packages: read.
+name: browser
+on:
+  workflow_call:
+    inputs:
+      checks:
+        description: 'JSON list of {"name", "run"}; each runs in its own job after the build.'
+        type: string
+        required: true
+      build:
+        description: Commands that build what the checks read.
+        type: string
+        default: bun run build && bun run storybook:build
+      playwright:
+        description: Install Playwright's Chromium, pinned by the Playwright version in bun.lock.
+        type: boolean
+        default: true
+      runner:
+        description: runs-on, as JSON.
+        type: string
+        default: '["self-hosted", "homelab"]'
+      timeout-minutes:
+        type: number
+        default: 30
+jobs:
+  browser:
+    name: ${{ matrix.check.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        check: ${{ fromJSON(inputs.checks) }}
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    env:
+      STORYBOOK_DISABLE_TELEMETRY: "1"
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.1.0
+      # The homelab runner has Chromium's system libraries and keeps downloaded
+      # browsers per Playwright version.
+      - if: inputs.playwright
+        run: bunx playwright install --no-shell chromium
+      - run: eval "$BUILD"
+        env:
+          BUILD: ${{ inputs.build }}
+      - run: eval "$CHECK"
+        env:
+          CHECK: ${{ matrix.check.run }}

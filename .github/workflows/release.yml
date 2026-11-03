@@ -1,0 +1,51 @@
+# Reusable: publishes from CI, as Data Grid's automated dependency release does.
+# `repo-kit publish` skips waiting for the checks workflow inside Actions, so
+# the caller orders this job after its check jobs. With enabled: false the job
+# runs and does nothing, so jobs that need it still run:
+#
+#   jobs:
+#     dependency-release:
+#       needs: [check, browser]
+#       uses: maxvyshniakov/repo-kit/.github/workflows/release.yml@v0.1.0
+#       with:
+#         command: node scripts/publish-catalog-release.mjs
+#         enabled: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+#
+# The caller grants contents: write and packages: write.
+name: release
+on:
+  workflow_call:
+    inputs:
+      command:
+        type: string
+        default: bun run release:publish
+      enabled:
+        type: boolean
+        default: true
+      runner:
+        description: runs-on, as JSON.
+        type: string
+        default: '["self-hosted", "homelab"]'
+      timeout-minutes:
+        type: number
+        default: 10
+jobs:
+  release:
+    name: Publish
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - if: inputs.enabled
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - if: inputs.enabled
+        uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.1.0
+      - if: inputs.enabled
+        run: eval "$COMMAND"
+        env:
+          COMMAND: ${{ inputs.command }}
+          GITHUB_TOKEN: ${{ github.token }}

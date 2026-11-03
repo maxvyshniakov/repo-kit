@@ -1,0 +1,39 @@
+# Reusable: the repository's gate, `bun run verify -- --release`, as the
+# pre-push hook runs it. Callers keep their workflow at
+# .github/workflows/check.yml, which `repo-kit publish` waits for:
+#
+#   jobs:
+#     check:
+#       uses: maxvyshniakov/repo-kit/.github/workflows/verify.yml@v0.1.0
+#
+# The caller grants contents: read and packages: read.
+name: verify
+on:
+  workflow_call:
+    inputs:
+      args:
+        description: Arguments after `bun run verify --`.
+        type: string
+        default: --release
+      runner:
+        description: runs-on, as JSON.
+        type: string
+        default: '["self-hosted", "homelab"]'
+      timeout-minutes:
+        type: number
+        default: 20
+jobs:
+  verify:
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    env:
+      STORYBOOK_DISABLE_TELEMETRY: "1"
+      # bunfig.toml reads @maxvyshniakov packages from GitHub Packages with this
+      # token, here and in the packed-consumer check's install.
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.1.0
+      - run: bun run verify -- $VERIFY_ARGS
+        env:
+          VERIFY_ARGS: ${{ inputs.args }}

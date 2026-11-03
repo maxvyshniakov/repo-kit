@@ -1,0 +1,29 @@
+# repo-kit's own checks. They use the composite action from this commit
+# (./actions/setup-bun), not the released tag the reusable workflows name, so a
+# release commit is checked before its tag exists.
+name: Library checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: read
+# Jobs run on the self-hosted homelab runner (maxvyshniakov/proxmox
+# docs/ci-runner.md). Pushes to dev run only the local pre-push hook.
+concurrency:
+  group: checks-${{ github.ref }}
+  # A newer push to a pull request supersedes its older run; every main commit
+  # keeps its own result for release:publish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  check:
+    runs-on: [self-hosted, homelab]
+    timeout-minutes: 15
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: ./actions/setup-bun
+      - run: bun run verify -- --release
