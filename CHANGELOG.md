@@ -4,6 +4,8 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+## 0.2.1 - 2026-11-03
+
 ### Fixed
 
 - `repo-kit heavy` handles SIGTERM, SIGHUP and SIGINT before its command starts. A signal that came between the start and the handlers (the command writes to the same stdout, so its reader can signal at once) killed repo-kit and left the command running; under load on Linux this hung 9 of 30 runs of its signal test, and Library checks for 0.2.0, which was never published. It also lets go of the handlers when the command cannot start.
