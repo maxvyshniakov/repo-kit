@@ -4,6 +4,8 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+## 0.2.3 - 2026-11-03
+
 ### Added
 
 - A verify step that runs past its timeout fails: `verify.stepTimeout` minutes (default 15; 0: no limit), or the step's own `timeout`. Its whole process tree gets SIGTERM, SIGKILL 5 s later, and verify stops waiting for its output 2 s after that, with `[step] timed out after …s` and `FAIL step (…, timed out)` in the summary. A repo-kit check hung for 15 minutes after its last output until the job limit cancelled it, with nothing naming the step (run 41630008769). A step that was stopped and still runs at its timeout is killed the same way.
@@ -11,7 +13,6 @@ Versions and release rules: [README.md](README.md#versioning).
 ### Changed
 
 - README: how a repository declares its steps' `memory` and `verify.workerMemory` from the summary's measured peaks.
-
 - `browser.yml` builds once and runs every check after it in one job, under one lease, through the new `repo-kit checks`: every check runs, after a failed one too, and the job fails naming the failed ones. The job is named by its checks (`browser + stories`). A job per check built Storybook once per check, and with the whole runner leased the checks ran one after another anyway; Sid-Kit 0.41.1's checks failed when three Storybook builds ran at once (straylight#656). Its default `timeout-minutes` rises from 30 to 45 to cover every check; callers with several long checks set it to the lease wait plus all of them.
 - `deploy-storybook.yml` runs `storybook:prepare-deploy`, which installs and builds the retained releases' Storybooks, under the lease too.
 
