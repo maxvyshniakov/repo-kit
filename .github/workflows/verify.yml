@@ -1,5 +1,7 @@
-# Reusable: the repository's gate, `bun run verify -- --release`, as the
-# pre-push hook runs it. Callers keep their workflow at
+# Reusable: the repository's gate, `bun run verify`, as the pre-push hook runs it:
+# with --release for main and for a pull request into main, without it elsewhere
+# (dev, branches, a manual run on either), where `## Unreleased` may hold
+# entries. Callers keep their workflow at
 # .github/workflows/check.yml, which `repo-kit publish` waits for:
 #
 #   jobs:
@@ -12,9 +14,9 @@ on:
   workflow_call:
     inputs:
       args:
-        description: Arguments after `bun run verify --`.
+        description: Further arguments after `bun run verify --`; --release comes from the ref.
         type: string
-        default: --release
+        default: ""
       runner:
         description: runs-on, as JSON.
         type: string
@@ -34,6 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.1.1
-      - run: bun run verify -- $VERIFY_ARGS
+      - run: bun run verify -- $RELEASE_ARGS $VERIFY_ARGS
         env:
+          RELEASE_ARGS: ${{ (github.ref == 'refs/heads/main' || github.base_ref == 'main') && '--release' || '' }}
           VERIFY_ARGS: ${{ inputs.args }}

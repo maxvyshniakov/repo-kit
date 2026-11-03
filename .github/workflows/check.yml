@@ -26,4 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: ./actions/setup-bun
-      - run: bun run verify -- --release
+      # --release for main and pull requests into main, as verify.yml decides.
+      - run: bun run verify -- $RELEASE_ARGS
+        env:
+          RELEASE_ARGS: ${{ (github.ref == 'refs/heads/main' || github.base_ref == 'main') && '--release' || '' }}

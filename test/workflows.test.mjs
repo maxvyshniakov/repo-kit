@@ -31,10 +31,20 @@ test("every reusable workflow sets up Bun through the action at this release's t
   }
 });
 
-test("repo-kit's own checks use the action from their own commit and run verify --release", () => {
+const releaseArgs = "RELEASE_ARGS: ${{ (github.ref == 'refs/heads/main' || github.base_ref == 'main') && '--release' || '' }}";
+
+test("verify.yml passes --release for main and pull requests into main only", () => {
+  const text = read(path.join(workflowsDir, "verify.yml"));
+  assert.ok(text.includes(releaseArgs));
+  assert.match(text, /- run: bun run verify -- \$RELEASE_ARGS \$VERIFY_ARGS\n/);
+  assert.match(text, /args:\n(?:\s+\w.*\n)*?\s+default: ""\n/, "args must not default to --release");
+});
+
+test("repo-kit's own checks use the action from their own commit and decide --release as verify.yml does", () => {
   const text = read(path.join(workflowsDir, "check.yml"));
   assert.match(text, /- uses: \.\/actions\/setup-bun\n/);
-  assert.match(text, /- run: bun run verify -- --release\n/);
+  assert.ok(text.includes(releaseArgs));
+  assert.match(text, /- run: bun run verify -- \$RELEASE_ARGS\n/);
   assert.match(text, /cancel-in-progress: \$\{\{ github.event_name == 'pull_request' \}\}/);
   assert.match(text, /workflow_dispatch:/);
 });

@@ -186,7 +186,7 @@ jobs:
 
 | Workflow | Inputs |
 |---|---|
-| `verify.yml` | `args` (`--release`), `runner`, `timeout-minutes` (20) |
+| `verify.yml` | `args` (none; `--release` is added for `main` and pull requests into `main`), `runner`, `timeout-minutes` (20) |
 | `browser.yml` | `checks` (JSON list of `{name, run}`), `build`, `playwright` (true), `runner`, `timeout-minutes` (30) |
 | `deploy-storybook.yml` | `url`, `environment` (`storybook`); `STORYBOOK_CLOUDFLARE_API_TOKEN` from that environment, with `secrets: inherit` |
 | `release.yml` | `command` (`bun run release:publish`), `enabled` (true), `runner`, `timeout-minutes` (10); the caller grants `contents: write`, `packages: write` |
