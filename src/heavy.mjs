@@ -33,29 +33,38 @@ export function leasedCommand(slots, command, { env = process.env, cwd = process
  * Runs `command` (argv) under a lease; resolves to its exit code. `input`, when
  * given, is written to its stdin. SIGTERM and SIGHUP are forwarded. SIGINT is
  * not: Ctrl-C reaches the child from the terminal's process group already, and
- * forwarding it too would deliver it twice. The listener keeps this process
- * alive until the child has handled it.
+ * forwarding it too would deliver it twice. The listeners keep this process
+ * alive until the child has handled the signal, and are in place before the
+ * child starts: the child writes to the same stdout, so whoever reads it can
+ * signal this process before spawn's caller runs another line.
  */
-export function runLeased(slots, command, { env = process.env, cwd = process.cwd(), input } = {}) {
+export function runLeased(slots, command, { env = process.env, cwd = process.cwd(), input, spawn: start = spawn } = {}) {
   const argv = leasedCommand(slots, command, { env, cwd });
   const [file, ...args] = argv;
   const leased = argv !== command;
-  const child = spawn(file, args, { cwd, env, stdio: [input === undefined ? "inherit" : "pipe", "inherit", "inherit"] });
-  if (input !== undefined) child.stdin.end(input);
+  // A signal is caught from here on and handled on the event loop, by when
+  // `child` is set.
+  let child;
   const forward = signal => child.kill(signal);
   const ignore = () => {};
   process.on("SIGTERM", forward);
   process.on("SIGHUP", forward);
   process.on("SIGINT", ignore);
+  const release = () => {
+    process.off("SIGTERM", forward);
+    process.off("SIGHUP", forward);
+    process.off("SIGINT", ignore);
+  };
+  child = start(file, args, { cwd, env, stdio: [input === undefined ? "inherit" : "pipe", "inherit", "inherit"] });
+  if (input !== undefined) child.stdin.end(input);
   return new Promise(resolve => {
     child.on("error", error => {
+      release();
       console.error(`${file}: ${error.message}`);
       resolve(127);
     });
     child.on("close", (code, signal) => {
-      process.off("SIGTERM", forward);
-      process.off("SIGHUP", forward);
-      process.off("SIGINT", ignore);
+      release();
       if (leased && code === WAIT_EXPIRED && slotWait(env)) {
         console.error(`repo-kit: gave up waiting for ${slots} slot(s) after ${slotWait(env)}s (slotfather status shows the queue)`);
       }

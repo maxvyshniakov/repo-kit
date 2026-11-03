@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { KIT_VERSION, kitIssues, kitReferences, packageManagerIssues, workflowIssues } from "../src/check.mjs";
-import { leasedCommand } from "../src/heavy.mjs";
+import { leasedCommand, runLeased } from "../src/heavy.mjs";
 import { hookIssues, hookStatus, installHooks, managedHooks, REFERENCE_TRANSACTION_SHA256, sha256, syncHooks } from "../src/hooks.mjs";
 import { bunTooOld, BUN_VERSION, resolveToken } from "../src/token.mjs";
 import { kitRoot, tempRepository } from "./fixtures.mjs";
@@ -137,7 +137,32 @@ test("Bun older than 1.4.4 is refused", () => {
   assert.match(bunTooOld(undefined), /not on PATH/);
 });
 
-test("repo-kit heavy forwards SIGTERM to its command but not SIGINT, which the command gets from the terminal", async () => {
+test("repo-kit heavy handles signals before its command starts, and lets go of them when it cannot start", async () => {
+  const signals = ["SIGTERM", "SIGHUP", "SIGINT"];
+  const before = Object.fromEntries(signals.map(signal => [signal, process.listenerCount(signal)]));
+  const { EventEmitter } = await import("node:events");
+  let atSpawn;
+  // The command can print "ready" and its caller can signal before spawn's caller
+  // runs another line: a signal then must already be handled.
+  const spawn = () => {
+    atSpawn = Object.fromEntries(signals.map(signal => [signal, process.listenerCount(signal) - before[signal]]));
+    const child = new EventEmitter();
+    child.kill = () => {};
+    setImmediate(() => child.emit("error", new Error("spawn ENOENT")));
+    return child;
+  };
+  const error = console.error;
+  console.error = () => {};
+  try {
+    assert.equal(await runLeased(1, ["missing-command"], { env: { SLOTFATHER_LEASE: "outer" }, spawn }), 127);
+  } finally {
+    console.error = error;
+  }
+  assert.deepEqual(atSpawn, { SIGTERM: 1, SIGHUP: 1, SIGINT: 1 });
+  for (const signal of signals) assert.equal(process.listenerCount(signal), before[signal], `${signal} listener left behind`);
+});
+
+test("repo-kit heavy forwards SIGTERM to its command but not SIGINT, which the command gets from the terminal", { timeout: 20_000 }, async () => {
   const { spawn } = await import("node:child_process");
   const repository = tempRepository({});
   try {
