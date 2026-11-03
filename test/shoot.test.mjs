@@ -7,7 +7,7 @@ import test from "node:test";
 
 import { withDefaults } from "../src/config.mjs";
 import { browserNames, launchBrowser, loadPlaywright, parseBrowserNames, parseShootArgs, readIndex, shootStories, shotFile, storyUrl } from "../src/shoot.mjs";
-import { pairingRecovery } from "../src/safari.mjs";
+import { closeSafari, pairingRecovery } from "../src/safari.mjs";
 import { kitRoot, tempRepository } from "./fixtures.mjs";
 
 const defaults = { root: "/work/sid-kit", env: {}, tmpdir: "/tmp", cwd: "/work/sid-kit", shoot: withDefaults({}).shoot };
@@ -273,4 +273,22 @@ test("Safari Technology Preview left paired by a dead driver is restarted; one p
   assert.equal(pairingRecovery(paired, []), "restart");
   assert.equal(pairingRecovery(paired, [4242]), "busy");
   assert.equal(pairingRecovery("safaridriver POST /session: You must enable 'Allow remote automation'", []), "fail");
+});
+
+test("closing Safari ends the session, stops the driver, and quits the automation window only when this run started it", async () => {
+  const run = async ({ startedInstance, quit = async () => steps.push("quit"), deleteSession = async () => steps.push("delete") }) => {
+    steps.length = 0;
+    const warnings = [];
+    await closeSafari({ deleteSession, killDriver: () => steps.push("kill"), startedInstance, quit, warn: message => warnings.push(message) });
+    return warnings;
+  };
+  const steps = [];
+  await run({ startedInstance: true });
+  assert.deepEqual(steps, ["delete", "kill", "quit"]);
+  await run({ startedInstance: false });
+  assert.deepEqual(steps, ["delete", "kill"], "an automation window that was there before the run is not ours to quit");
+  const warnings = await run({ startedInstance: true, quit: async () => { throw new Error("Safari Technology Preview's automation window did not quit"); } });
+  assert.deepEqual(warnings, ["repo-kit: Safari Technology Preview's automation window did not quit"], "a lingering window warns instead of failing the run");
+  await assert.rejects(run({ startedInstance: true, deleteSession: async () => { throw new Error("session gone"); } }), /session gone/);
+  assert.deepEqual(steps, ["kill", "quit"], "the driver stops and the window quits even when ending the session fails");
 });

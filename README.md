@@ -204,7 +204,8 @@ Safari itself refuses WebDriver while the owner has it open, so `safari` drives 
 beside it. One-time setup by the owner: `brew install --cask safari-technology-preview` (the installer asks for an
 administrator password), then in its own Settings, Advanced → "Show features for web developers" and Developer →
 "Allow remote automation". safaridriver brings the window to the front; shoot hands focus straight back to the app
-that had it, and the window keeps drawing behind the owner's apps. Do not hide or minimise it: WebKit then marks the
+that had it, and the window keeps drawing behind the owner's apps. When the run ends, shoot quits the automation window
+it started (SIGTERM: in automation mode it ignores a quit request and window close). Do not hide or minimise it: WebKit then marks the
 page hidden, stops drawing frames and cannot screenshot. A run that ended without closing its session (killed, or its
 safaridriver gone) leaves Safari Technology Preview "already paired with another WebDriver session"; when no other
 safaridriver of it runs, shoot quits that automation window (`--automation`, never the owner's own) and starts again,

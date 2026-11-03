@@ -89,6 +89,37 @@ async function quitAutomationInstance() {
   throw new Error("Safari Technology Preview's automation window did not quit");
 }
 
+function automationInstanceRuns() {
+  try {
+    execFileSync("pgrep", ["-f", automationInstance]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Ends a run's Safari: the WebDriver session, then the driver, then, when this
+ * run started it, the automation window. Ending the session leaves Safari
+ * Technology Preview open in --automation mode, ignoring real input and
+ * holding memory; it ignores NSRunningApplication.terminate and window close
+ * there, so it gets SIGTERM. A window that lingers warns: the pictures are taken.
+ */
+export async function closeSafari({ deleteSession, killDriver, startedInstance, quit = quitAutomationInstance, warn = console.warn }) {
+  try {
+    await deleteSession();
+  } finally {
+    killDriver();
+    if (startedInstance) {
+      try {
+        await quit();
+      } catch (error) {
+        warn(`repo-kit: ${error.message}`);
+      }
+    }
+  }
+}
+
 export async function launchSafari() {
   if (!fs.existsSync(driverPath)) throw new Error(`Safari Technology Preview is not installed: ${app} (repo-kit README, "Story screenshots")`);
   const port = await freePort();
@@ -104,6 +135,8 @@ export async function launchSafari() {
     return value;
   };
   const capabilities = { capabilities: { alwaysMatch: { browserName: "Safari Technology Preview" } } };
+  // An automation window that runs already belongs to another run, or to one that died.
+  let startedInstance = !automationInstanceRuns();
   let session;
   try {
     try {
@@ -115,10 +148,12 @@ export async function launchSafari() {
       if (recovery !== "restart") throw error;
       console.warn("repo-kit: Safari Technology Preview was left paired by a run that ended; restarting its automation window");
       await quitAutomationInstance();
+      startedInstance = true;
       session = await call("POST", "/session", capabilities);
     }
   } catch (error) {
     driver.kill();
+    if (startedInstance) await quitAutomationInstance().catch(() => {});
     throw error;
   } finally {
     if (previous && previous !== previewBundle) activate(previous);
@@ -154,13 +189,7 @@ export async function launchSafari() {
       if (viewport) await page.setViewportSize(viewport);
       return page;
     },
-    async close() {
-      try {
-        await call("DELETE", at(""));
-      } finally {
-        driver.kill();
-      }
-    },
+    close: () => closeSafari({ deleteSession: () => call("DELETE", at("")), killDriver: () => driver.kill(), startedInstance }),
   };
   return browser;
 }
