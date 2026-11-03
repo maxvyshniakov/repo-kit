@@ -17,10 +17,6 @@ export default {
       { name: "packed consumer", command: ["run", "check:consumer"] },
     ],
   },
-  // Until repo-kit has a homelab runner (maxvyshniakov/proxmox
-  // playbooks/register-ci-runners.yml), Library checks stays queued and publish
-  // cannot wait for it; remove once a main run has passed.
-  publish: { checks: false },
   packedConsumer: {
     // Plain JavaScript; there are no declarations to type-check.
     types: false,
