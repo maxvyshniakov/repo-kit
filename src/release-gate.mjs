@@ -28,9 +28,9 @@ import path from "node:path";
 
 import { KIT_VERSION } from "./check.mjs";
 import { SOFTWARE_SWITCHES, compositingStatus, defaultBrowsersPath, playwrightChromium, shadowBrowsers, softwareCompositing } from "./chromium.mjs";
-import { loadConfig } from "./config.mjs";
+import { CONFIG_FILE, loadConfig } from "./config.mjs";
 import { leaseSelf } from "./heavy.mjs";
-import { cleanEnvironment } from "./pre-push.mjs";
+import { cleanEnvironment, verifyCommand } from "./pre-push.mjs";
 // publish.mjs imports this module too; both use each other only at call time.
 import { githubRepository } from "./publish.mjs";
 import { runTlsGate } from "./tls.mjs";
@@ -204,6 +204,21 @@ export async function softwareChromium({ worktree, env, step }) {
   }
 }
 
+/**
+ * The commands that verify a checked-out commit: { release, browser } as
+ * [file, args], browser undefined when it declares no browser checks. A commit
+ * from before the repository took its gate from repo-kit has no
+ * repo-kit.config.mjs; its own verify and verify:browser scripts run, as the
+ * pre-push hook runs them.
+ */
+export async function gateCommands(worktree) {
+  const manifest = path.join(worktree, "package.json");
+  const scripts = fs.existsSync(manifest) ? JSON.parse(fs.readFileSync(manifest, "utf8")).scripts ?? {} : {};
+  const configBrowser = fs.existsSync(path.join(worktree, CONFIG_FILE)) && Boolean((await loadConfig(worktree)).verify?.browser);
+  const browser = scripts["verify:browser"] ? ["bun", ["run", "verify:browser"]] : configBrowser ? ["bun", ["run", "verify", "--", "--browser"]] : undefined;
+  return { release: verifyCommand(worktree, true), browser };
+}
+
 function parseArguments(args) {
   const known = new Set(["--no-attest", "--rerun"]);
   for (const arg of args) if (arg.startsWith("--") && !known.has(arg)) throw new Error(`release-gate: unknown option ${arg}`);
@@ -338,10 +353,11 @@ export async function runReleaseGate(config, args = [], deps = {}) {
   try {
     git("worktree", "add", "--detach", worktree, sha);
     let ok = await timed("install", () => step("install", "bun", ["install", "--frozen-lockfile"]));
-    let browser = false;
+    let commands = {};
     if (ok) {
       try {
-        browser = Boolean((await loadConfig(worktree)).verify?.browser);
+        commands = await gateCommands(worktree);
+        if (!commands.release) throw new Error(`${short} has no verify script: nothing to gate`);
         chromium = await prepareChromium({ worktree, env: stepEnv, step });
         if (chromium) {
           stepEnv = { ...stepEnv, ...chromium.env };
@@ -350,7 +366,7 @@ export async function runReleaseGate(config, args = [], deps = {}) {
         } else {
           say("\nrelease-gate: no Playwright in this commit, so no Chromium to start with software compositing.\n");
         }
-        if (browser && !chromium) {
+        if (commands.browser && !chromium) {
           record("software Chromium", false, "no Playwright");
           say("release-gate: verify.browser is configured, but this commit has no Playwright: the gate cannot start its Chromium with software compositing as CI did.\n", stderr);
           ok = false;
@@ -361,9 +377,9 @@ export async function runReleaseGate(config, args = [], deps = {}) {
         ok = false;
       }
     }
-    ok = ok && await timed("verify --release", () => step("verify --release", "bun", ["run", "verify", "--", "--release"]));
-    if (ok && browser) {
-      ok = await timed("verify --browser", () => step("verify --browser", "bun", ["run", "verify", "--", "--browser"]));
+    ok = ok && await timed("verify --release", () => step("verify --release", ...commands.release));
+    if (ok && commands.browser) {
+      ok = await timed("verify --browser", () => step("verify --browser", ...commands.browser));
       launches = chromium.launches();
       if (ok && launches === 0) {
         record("software Chromium launches", false, "none");
@@ -373,7 +389,7 @@ export async function runReleaseGate(config, args = [], deps = {}) {
         record("software Chromium launches", true, `${launches} Chromium launches with ${SOFTWARE_SWITCHES.join(" ")}`);
       }
     } else if (ok) {
-      say("\nrelease-gate: no verify.browser in this commit's repo-kit.config.mjs; no browser checks to run.\n");
+      say("\nrelease-gate: no verify.browser in this commit's repo-kit.config.mjs and no verify:browser script; no browser checks to run.\n");
     }
     const seconds = (Date.now() - started) / 1000;
     const passed = ok && !stopped;

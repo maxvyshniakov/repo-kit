@@ -122,8 +122,12 @@ test("repo-kit ci-gate writes run=true|false for the deploy's later steps", () =
 });
 
 // A repository whose `bun` logs what the gate runs, and a fake GitHub API.
-function gateFixture({ verifyExit = "0", browser = false } = {}) {
-  const repository = tempRepository({
+function gateFixture({ verifyExit = "0", browser = false, historical = false } = {}) {
+  // historical: a commit from before the repository took its gate from repo-kit
+  // (Sid-Kit's 0.41.1): no repo-kit.config.mjs, its own verify scripts.
+  const repository = tempRepository(historical ? {
+    "package.json": { name: "@maxvyshniakov/example", version: "0.2.0", scripts: { verify: "node scripts/verify.mjs", "verify:browser": "node scripts/verify.mjs --browser" } },
+  } : {
     "package.json": { name: "@maxvyshniakov/example", version: "0.2.0", scripts: { verify: "repo-kit verify" } },
     "repo-kit.config.mjs": browser
       ? 'export default { verify: { steps: () => [], browser: () => [] } };\n'
@@ -162,7 +166,7 @@ esac
     fs.rmSync(log, { force: true });
     return lines;
   };
-  const config = async () => withDefaults((await import(`${path.join(root, "repo-kit.config.mjs")}?${Date.now()}`)).default);
+  const config = async () => withDefaults(historical ? {} : (await import(`${path.join(root, "repo-kit.config.mjs")}?${Date.now()}`)).default);
   const gate = async (args = [], extra) => {
     const streams = capture();
     const result = await runReleaseGate({ root, ...(await config()) }, args, { ...deps(extra), ...streams });
@@ -293,6 +297,18 @@ test("browser checks run against Chromium with software compositing, and must st
     const silent = await fixture.gate(["--no-attest", "--rerun"], { softwareChromium });
     assert.equal(silent.result, 1, silent.output);
     assert.match(silent.output, /started no Chromium through the software-compositing wrapper/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("a commit from before the kit runs its own verify and verify:browser scripts", async () => {
+  const fixture = gateFixture({ historical: true });
+  try {
+    const softwareChromium = async () => ({ env: { PLAYWRIGHT_BROWSERS_PATH: "/mirror" }, summary: "software", launches: () => 2, cleanup: () => {} });
+    const { result, output } = await fixture.gate(["--no-attest"], { softwareChromium });
+    assert.equal(result, 0, output);
+    assert.deepEqual(fixture.ran().filter(line => line.startsWith("run ")), ["run verify -- --release /mirror", "run verify:browser /mirror"]);
   } finally {
     fixture.cleanup();
   }
