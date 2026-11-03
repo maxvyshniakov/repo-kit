@@ -26,9 +26,18 @@ on:
         description: runs-on, as JSON.
         type: string
         default: '["self-hosted", "homelab"]'
-      timeout-minutes:
+      slots:
+        description: slotfather slots the job leases, where the runner has slotfather; all holds the whole runner (the homelab runner's two 5 GiB slots).
+        type: string
+        default: all
+      slot-wait:
+        description: Seconds to wait for that lease before failing with that reason; 0 waits as long as the job runs.
         type: number
-        default: 10
+        default: 0
+      timeout-minutes:
+        description: Includes the wait for the lease.
+        type: number
+        default: 30
 jobs:
   release:
     name: Publish
@@ -44,8 +53,12 @@ jobs:
           fetch-depth: 0
       - if: inputs.enabled
         uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.2.1
+      # Publishing builds the package (prepack): it runs under a lease, like every
+      # heavy job here.
       - if: inputs.enabled
-        run: eval "$COMMAND"
+        run: node_modules/.bin/repo-kit heavy "$SLOTS" sh -c 'eval "$COMMAND"'
         env:
           COMMAND: ${{ inputs.command }}
           GITHUB_TOKEN: ${{ github.token }}
+          SLOTS: ${{ inputs.slots }}
+          REPO_KIT_SLOT_WAIT: ${{ inputs.slot-wait }}

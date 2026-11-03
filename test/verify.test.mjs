@@ -204,6 +204,34 @@ function fakeRepository(bunScript) {
   return { ...repository, env };
 }
 
+test("verify leases REPO_KIT_VERIFY_SLOTS when set, as CI's verify.yml sets it, and its configured slots otherwise", () => {
+  const repository = tempRepository({
+    "package.json": { name: "fake", version: "0.0.0", type: "module" },
+    "repo-kit.config.mjs": `export default { verify: { slots: 1, browserSlots: 2, steps: [{ name: "lint", command: ["run", "lint"] }], browser: [{ name: "stories", command: ["run", "stories"] }] } };\n`,
+  });
+  try {
+    const bin = path.join(repository.root, "bin");
+    const calls = path.join(repository.root, "calls");
+    fs.mkdirSync(bin);
+    // A slotfather that records its arguments instead of running the command.
+    fs.writeFileSync(path.join(bin, "slotfather"), `#!/bin/sh\necho "$*" >> "${calls}"\n`, { mode: 0o755 });
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    delete env.SLOTFATHER_LEASE;
+    delete env.REPO_KIT_VERIFY_SLOTS;
+    delete env.REPO_KIT_SLOT_WAIT;
+    delete env.SID_KIT_SLOT_WAIT;
+    const verify = (args, extra = {}) => spawnSync(process.execPath, [cli, "verify", ...args], { cwd: repository.root, env: { ...env, ...extra }, encoding: "utf8" });
+    assert.equal(verify([]).status, 0);
+    assert.equal(verify(["--browser"]).status, 0);
+    assert.equal(verify([], { REPO_KIT_VERIFY_SLOTS: "all" }).status, 0);
+    assert.equal(verify(["--browser"], { REPO_KIT_VERIFY_SLOTS: "all" }).status, 0);
+    const leases = fs.readFileSync(calls, "utf8").trim().split("\n").map(line => line.split(" -- ")[0]);
+    assert.deepEqual(leases, ["run -n 1 --label " + path.basename(repository.root), "run -n 2 --label " + path.basename(repository.root), "run -n all --label " + path.basename(repository.root), "run -n all --label " + path.basename(repository.root)]);
+  } finally {
+    repository.cleanup();
+  }
+});
+
 function runFakeVerify({ failing = "", bytes = 1 << 20, sleepBuild = false } = {}) {
   const repository = fakeRepository(`#!/bin/sh
 node -e 'process.stdout.write("x".repeat(${bytes}) + "\\n")'

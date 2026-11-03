@@ -198,10 +198,16 @@ jobs:
 
 | Workflow | Inputs |
 |---|---|
-| `verify.yml` | `args` (none; `--release` is added for `main` and pull requests into `main`), `runner`, `timeout-minutes` (20), `slot-wait` (0: wait as long as the job runs) |
-| `browser.yml` | `checks` (JSON list of `{name, run}`), `build`, `playwright` (true), `slots` (2: the build and the check lease them together), `slot-wait` (0), `runner`, `timeout-minutes` (30) |
-| `deploy-storybook.yml` | `url`, `environment` (`storybook`); `STORYBOOK_CLOUDFLARE_API_TOKEN` from that environment, with `secrets: inherit` |
-| `release.yml` | `command` (`bun run release:publish`), `enabled` (true), `runner`, `timeout-minutes` (10); the caller grants `contents: write`, `packages: write` |
+| `verify.yml` | `args` (none; `--release` is added for `main` and pull requests into `main`), `slots` (`all`), `slot-wait` (0: wait as long as the job runs), `runner`, `timeout-minutes` (20) |
+| `browser.yml` | `checks` (JSON list of `{name, run}`), `build`, `playwright` (true), `slots` (`all`: the build and the check lease them together), `slot-wait` (0), `runner`, `timeout-minutes` (30) |
+| `deploy-storybook.yml` | `url`, `environment` (`storybook`), `slots` (`all`, for the builds), `slot-wait` (0), `timeout-minutes` (30); `STORYBOOK_CLOUDFLARE_API_TOKEN` from that environment, with `secrets: inherit` |
+| `release.yml` | `command` (`bun run release:publish`), `enabled` (true), `slots` (`all`), `slot-wait` (0), `runner`, `timeout-minutes` (30); the caller grants `contents: write`, `packages: write` |
+
+Every heavy step of these workflows runs under a slotfather lease where the runner has slotfather: `verify`, the
+browser build and check, the Storybook builds and the release command. `slots` defaults to `all`, the whole runner (the
+homelab runner has two 5 GiB slots), so no heavy job runs beside another and each gets the runner's memory; a job waits
+for the lease instead. `verify.yml` passes `slots` to verify as `REPO_KIT_VERIFY_SLOTS`, which overrides
+`verify.slots` and `verify.browserSlots`.
 
 Jobs show as `<caller job> / <reusable job>`, for example `check / verify` and `deploy / Publish private Storybook`.
 

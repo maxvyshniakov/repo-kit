@@ -13,6 +13,15 @@ export function hasSlotfather(env = process.env) {
   return spawnSync("sh", ["-c", "command -v slotfather"], { env, stdio: "ignore" }).status === 0;
 }
 
+/**
+ * The slots `verify` leases: REPO_KIT_VERIFY_SLOTS when set (CI's reusable
+ * workflows set it, `all` by default, so a job holds the whole runner),
+ * otherwise the repository's configured count.
+ */
+export function verifyLeaseSlots(configured, env = process.env) {
+  return env.REPO_KIT_VERIFY_SLOTS || configured;
+}
+
 // slotfather's exit status when --wait ran out before a lease was granted.
 export const WAIT_EXPIRED = 75;
 

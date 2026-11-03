@@ -34,8 +34,8 @@ export async function main([command, ...args]) {
   switch (command) {
     case "verify": {
       const browser = args.includes("--browser");
-      const { leaseSelf } = await import("./heavy.mjs");
-      if (await leaseSelf(browser ? config.verify.browserSlots : config.verify.slots)) return process.exitCode;
+      const { leaseSelf, verifyLeaseSlots } = await import("./heavy.mjs");
+      if (await leaseSelf(verifyLeaseSlots(browser ? config.verify.browserSlots : config.verify.slots))) return process.exitCode;
       const { runVerify } = await import("./verify.mjs");
       await runVerify(config, { release: args.includes("--release"), browser });
       return process.exitCode;

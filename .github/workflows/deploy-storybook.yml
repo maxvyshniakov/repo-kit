@@ -28,9 +28,18 @@ on:
         description: runs-on, as JSON.
         type: string
         default: '["self-hosted", "homelab"]'
-      timeout-minutes:
+      slots:
+        description: slotfather slots the builds lease, where the runner has slotfather; all holds the whole runner (the homelab runner's two 5 GiB slots).
+        type: string
+        default: all
+      slot-wait:
+        description: Seconds to wait for that lease before failing with that reason; 0 waits as long as the job runs.
         type: number
-        default: 20
+        default: 0
+      timeout-minutes:
+        description: Includes the wait for the lease.
+        type: number
+        default: 30
     secrets:
       STORYBOOK_CLOUDFLARE_API_TOKEN:
         description: Read from the environment named by `environment`.
@@ -62,8 +71,11 @@ jobs:
         with:
           fetch-depth: 0
       - uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.2.1
-      - run: bun run build
-      - run: bun run storybook:build
+      # The builds are heavy: they run under one lease, like every heavy job here.
+      - run: node_modules/.bin/repo-kit heavy "$SLOTS" sh -c 'bun run build && bun run storybook:build'
+        env:
+          SLOTS: ${{ inputs.slots }}
+          REPO_KIT_SLOT_WAIT: ${{ inputs.slot-wait }}
       - run: bun run storybook:prepare-deploy
         env:
           GITHUB_TOKEN: ${{ github.token }}

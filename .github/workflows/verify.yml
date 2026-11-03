@@ -1,7 +1,9 @@
 # Reusable: the repository's gate, `bun run verify`, as the pre-push hook runs it:
 # with --release for main and for a pull request into main, without it elsewhere
 # (dev, branches, a manual run on either), where `## Unreleased` may hold
-# entries. Callers keep their workflow at
+# entries. verify leases `slots` (default all: the whole runner) through
+# slotfather, so it never runs beside another repository's heavy job and its
+# memory budget is the runner's. Callers keep their workflow at
 # .github/workflows/check.yml, which `repo-kit publish` waits for:
 #
 #   jobs:
@@ -24,8 +26,12 @@ on:
       timeout-minutes:
         type: number
         default: 20
+      slots:
+        description: slotfather slots the job leases, where the runner has slotfather; all holds the whole runner (the homelab runner's two 5 GiB slots).
+        type: string
+        default: all
       slot-wait:
-        description: Seconds verify waits for its slotfather lease before failing with that reason; 0 waits as long as the job runs.
+        description: Seconds to wait for that lease before failing with that reason; 0 waits as long as the job runs.
         type: number
         default: 0
 jobs:
@@ -38,6 +44,7 @@ jobs:
       # token, here and in the packed-consumer check's install.
       GITHUB_TOKEN: ${{ github.token }}
       REPO_KIT_SLOT_WAIT: ${{ inputs.slot-wait }}
+      REPO_KIT_VERIFY_SLOTS: ${{ inputs.slots }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.2.1

@@ -60,6 +60,25 @@ test("browser.yml builds and checks under one lease, and both gates can give up 
   }
 });
 
+test("every heavy step of the reusable workflows runs under a lease of the whole runner by default", () => {
+  const leased = {
+    "verify.yml": /- run: bun run verify -- \$RELEASE_ARGS \$VERIFY_ARGS\n/,
+    "browser.yml": /- run: node_modules\/\.bin\/repo-kit heavy "\$SLOTS" sh -c 'eval "\$BUILD" && eval "\$CHECK"'\n/,
+    "deploy-storybook.yml": /- run: node_modules\/\.bin\/repo-kit heavy "\$SLOTS" sh -c 'bun run build && bun run storybook:build'\n/,
+    "release.yml": /run: node_modules\/\.bin\/repo-kit heavy "\$SLOTS" sh -c 'eval "\$COMMAND"'\n/,
+  };
+  for (const [file, step] of Object.entries(leased)) {
+    const text = read(path.join(workflowsDir, file));
+    assert.match(text, step, file);
+    assert.match(text, /\n      slots:\n(?:        .*\n)*?        type: string\n        default: all\n/, `${file}: slots defaults to all`);
+    assert.match(text, /REPO_KIT_SLOT_WAIT: \$\{\{ inputs\.slot-wait \}\}\n/, file);
+    // Nothing heavy outside the lease: no build or check as a step of its own.
+    assert.doesNotMatch(text, /- run: (bun run (build|storybook:build)|eval "\$(BUILD|CHECK|COMMAND)")\n/, `${file} runs a heavy step outside the lease`);
+  }
+  // verify leases itself: the workflow tells it how many slots.
+  assert.match(read(path.join(workflowsDir, "verify.yml")), /REPO_KIT_VERIFY_SLOTS: \$\{\{ inputs\.slots \}\}\n/);
+});
+
 test("third-party actions are pinned by commit SHA", () => {
   const files = [...fs.readdirSync(workflowsDir).map(file => path.join(workflowsDir, file)), path.join(kitRoot, "actions/setup-bun/action.yml")];
   for (const file of files) {

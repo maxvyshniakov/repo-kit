@@ -29,9 +29,9 @@ on:
         type: string
         default: '["self-hosted", "homelab"]'
       slots:
-        description: slotfather slots the build and the check lease together, where the runner has slotfather.
-        type: number
-        default: 2
+        description: slotfather slots the job leases, where the runner has slotfather; all holds the whole runner (the homelab runner's two 5 GiB slots).
+        type: string
+        default: all
       slot-wait:
         description: Seconds to wait for that lease before failing with that reason; 0 waits as long as the job runs.
         type: number
