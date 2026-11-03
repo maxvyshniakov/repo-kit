@@ -1,4 +1,8 @@
-# Reusable: browser checks against a static Storybook build, one job per check.
+# Reusable: browser checks against a static Storybook build. One job builds it
+# once and runs every check after it, in order, under one slotfather lease:
+# with the whole runner leased the checks could not run side by side anyway,
+# and a job per check built Storybook once per check (straylight#656). Every
+# check runs, after a failed one too; the job fails naming the failed ones.
 #
 #   jobs:
 #     browser:
@@ -13,7 +17,7 @@ on:
   workflow_call:
     inputs:
       checks:
-        description: 'JSON list of {"name", "run"}; each runs in its own job after the build.'
+        description: 'JSON list of {"name", "run"}; each runs in turn after the build, in one job.'
         type: string
         required: true
       build:
@@ -37,15 +41,12 @@ on:
         type: number
         default: 0
       timeout-minutes:
+        description: Covers the wait for the lease, the build and every check.
         type: number
-        default: 30
+        default: 45
 jobs:
   browser:
-    name: ${{ matrix.check.name }}
-    strategy:
-      fail-fast: false
-      matrix:
-        check: ${{ fromJSON(inputs.checks) }}
+    name: ${{ join(fromJSON(inputs.checks).*.name, ' + ') }}
     runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     env:
@@ -59,11 +60,11 @@ jobs:
       # browsers per Playwright version.
       - if: inputs.playwright
         run: bunx playwright install --no-shell chromium
-      # The build and the check run under one lease, so the build queues with the
-      # runner's other jobs too; a check that leases again (repo-kit heavy) runs
-      # inside it.
-      - run: node_modules/.bin/repo-kit heavy "$SLOTS" sh -c 'eval "$BUILD" && eval "$CHECK"'
+      # The build and the checks run under one lease, so the build queues with
+      # the runner's other jobs too; a check that leases again (repo-kit heavy)
+      # runs inside it.
+      - run: node_modules/.bin/repo-kit heavy "$SLOTS" sh -c 'eval "$BUILD" && node_modules/.bin/repo-kit checks'
         env:
           SLOTS: ${{ inputs.slots }}
           BUILD: ${{ inputs.build }}
-          CHECK: ${{ matrix.check.run }}
+          REPO_KIT_CHECKS: ${{ inputs.checks }}

@@ -8,6 +8,11 @@ Versions and release rules: [README.md](README.md#versioning).
 
 - A verify step that runs past its timeout fails: `verify.stepTimeout` minutes (default 15; 0: no limit), or the step's own `timeout`. Its whole process tree gets SIGTERM, SIGKILL 5 s later, and verify stops waiting for its output 2 s after that, with `[step] timed out after …s` and `FAIL step (…, timed out)` in the summary. A repo-kit check hung for 15 minutes after its last output until the job limit cancelled it, with nothing naming the step (run 41630008769). A step that was stopped and still runs at its timeout is killed the same way.
 
+### Changed
+
+- `browser.yml` builds once and runs every check after it in one job, under one lease, through the new `repo-kit checks`: every check runs, after a failed one too, and the job fails naming the failed ones. The job is named by its checks (`browser + stories`). A job per check built Storybook once per check, and with the whole runner leased the checks ran one after another anyway; Sid-Kit 0.41.1's checks failed when three Storybook builds ran at once (straylight#656). Its default `timeout-minutes` rises from 30 to 45 to cover every check; callers with several long checks set it to the lease wait plus all of them.
+- `deploy-storybook.yml` runs `storybook:prepare-deploy`, which installs and builds the retained releases' Storybooks, under the lease too.
+
 ### Fixed
 
 - A step's measured peak counts its whole process tree: its process group, every descendant by parent pid, processes it started that were since reparented, and daemons orphaned before a sample saw them (agent-browser's), which carry the step's `REPO_KIT_STEP` in their environment. Browsers that start sessions of their own (Chromium, agent-browser) used to fall outside the group, so Sid-Kit's browser checks read 0.4 GiB while the runner peaked at 8.85 GB (straylight#656). On Linux the summary also shows the job cgroup's peak: `memory.peak`, reset for the run where the kernel allows (6.12 and later), else the per-second samples of `memory.current`; it includes page cache.

@@ -7,6 +7,7 @@ const USAGE = `Usage: repo-kit <command>
   verify [--release] [--browser]   the repository's gate (repo-kit.config.mjs verify)
   pre-push                         the pre-push hook: verify each pushed commit in a clean worktree
   heavy <slots|all> <command...>   run a command under a slotfather lease, when slotfather is installed
+  checks                           run REPO_KIT_CHECKS' list of {name, run} in order, as browser.yml does
   hooks <install|sync|check|status>
   check                            managed hooks, workflow references and packageManager match the kit
   check-changelogs [--release]
@@ -22,6 +23,10 @@ export async function main([command, ...args]) {
     if (!slots || !rest.length) return usage();
     const { runLeased } = await import("./heavy.mjs");
     return runLeased(slots, rest[0] === "--" ? rest.slice(1) : rest);
+  }
+  if (command === "checks") {
+    const { parseChecks, runChecks } = await import("./checks.mjs");
+    return runChecks(parseChecks(process.env.REPO_KIT_CHECKS));
   }
   if (command === "tls") {
     const { runTlsGate } = await import("./tls.mjs");

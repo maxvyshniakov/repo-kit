@@ -200,17 +200,24 @@ jobs:
 | Workflow | Inputs |
 |---|---|
 | `verify.yml` | `args` (none; `--release` is added for `main` and pull requests into `main`), `slots` (`all`), `slot-wait` (0: wait as long as the job runs), `runner`, `timeout-minutes` (20) |
-| `browser.yml` | `checks` (JSON list of `{name, run}`), `build`, `playwright` (true), `slots` (`all`: the build and the check lease them together), `slot-wait` (0), `runner`, `timeout-minutes` (30) |
-| `deploy-storybook.yml` | `url`, `environment` (`storybook`), `slots` (`all`, for the builds), `slot-wait` (0), `timeout-minutes` (30); `STORYBOOK_CLOUDFLARE_API_TOKEN` from that environment, with `secrets: inherit` |
+| `browser.yml` | `checks` (JSON list of `{name, run}`), `build`, `playwright` (true), `slots` (`all`: the build and every check lease them together), `slot-wait` (0), `runner`, `timeout-minutes` (45: the wait, the build and every check) |
+| `deploy-storybook.yml` | `url`, `environment` (`storybook`), `slots` (`all`, for the builds and `storybook:prepare-deploy`), `slot-wait` (0), `timeout-minutes` (30); `STORYBOOK_CLOUDFLARE_API_TOKEN` from that environment, with `secrets: inherit` |
 | `release.yml` | `command` (`bun run release:publish`), `enabled` (true), `slots` (`all`), `slot-wait` (0), `runner`, `timeout-minutes` (30); the caller grants `contents: write`, `packages: write` |
 
 Every heavy step of these workflows runs under a slotfather lease where the runner has slotfather: `verify`, the
-browser build and check, the Storybook builds and the release command. `slots` defaults to `all`, the whole runner (the
+browser build and checks, the Storybook builds and `storybook:prepare-deploy`, and the release command. What runs
+outside one is light: checkout, the TLS gate, `bun install`, the cached Playwright browser and the Cloudflare upload. `slots` defaults to `all`, the whole runner (the
 homelab runner has two 5 GiB slots), so no heavy job runs beside another and each gets the runner's memory; a job waits
 for the lease instead. `verify.yml` passes `slots` to verify as `REPO_KIT_VERIFY_SLOTS`, which overrides
 `verify.slots` and `verify.browserSlots`.
 
-Jobs show as `<caller job> / <reusable job>`, for example `check / verify` and `deploy / Publish private Storybook`.
+`browser.yml` builds once and runs its checks one after another in one job, `repo-kit checks`: every check runs,
+after a failed one too, and the job fails naming the failed ones. Under a lease of the whole runner a job per check
+could not run side by side with another anyway, and each built Storybook again (straylight#656). Set
+`timeout-minutes` to cover the lease wait plus the build and every check.
+
+Jobs show as `<caller job> / <reusable job>`, for example `check / verify`, `browser / browser + stories` (named by
+its checks) and `deploy / Publish private Storybook`.
 
 A cancelled run counts as failed for `publish`, so `cancel-in-progress` covers pull requests only.
 

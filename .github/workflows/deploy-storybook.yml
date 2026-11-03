@@ -76,9 +76,12 @@ jobs:
         env:
           SLOTS: ${{ inputs.slots }}
           REPO_KIT_SLOT_WAIT: ${{ inputs.slot-wait }}
-      - run: bun run storybook:prepare-deploy
+      # It installs and builds the Storybooks of the retained releases: heavy too.
+      - run: node_modules/.bin/repo-kit heavy "$SLOTS" bun run storybook:prepare-deploy
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          SLOTS: ${{ inputs.slots }}
+          REPO_KIT_SLOT_WAIT: ${{ inputs.slot-wait }}
       - run: bun run storybook:deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.STORYBOOK_CLOUDFLARE_API_TOKEN }}
