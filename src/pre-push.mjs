@@ -5,6 +5,8 @@
 //
 // The hook holds one slot lease (prePush.slots) for the installs and every
 // verification, including older commits whose verify has no lease of its own.
+// It works out which pushed commits have not passed before it leases, so a
+// push of verified commits takes no slot.
 // `bun install` in the worktree reads the private registry with GITHUB_TOKEN,
 // or with `gh auth token` when GITHUB_TOKEN is unset.
 import { execFileSync, spawnSync } from "node:child_process";
@@ -33,6 +35,40 @@ export function commitsToVerify(stdin) {
     commits.set(localSha, (commits.get(localSha) ?? false) || release);
   }
   return [...commits].map(([sha, release]) => ({ sha, release }));
+}
+
+/** The key a passed commit is recorded under. */
+export function verifiedKey(sha, release) {
+  return `${sha}${release ? " release" : ""}`;
+}
+
+export function verifyLabel(release) {
+  return `bun run verify${release ? " -- --release" : ""}`;
+}
+
+/** The pushed commits that have not passed yet: a release needs a release pass. */
+export function pendingCommits(stdin, verified) {
+  return commitsToVerify(stdin).filter(({ sha, release }) => !verified.has(verifiedKey(sha, release)));
+}
+
+/**
+ * The pushed commits, split by the record in the common Git directory into
+ * those that passed already and those left to verify. The hook leases only when
+ * some are left: a push of commits that passed would otherwise wait for slots
+ * to run nothing.
+ */
+export function pushedCommits(stdin, env = cleanEnvironment()) {
+  const left = pendingCommits(stdin, readVerified(commonGitDir(env)));
+  const passed = commitsToVerify(stdin).filter(({ sha, release }) => !left.some(commit => commit.sha === sha && commit.release === release));
+  return { passed, left };
+}
+
+export function reportPassed(passed) {
+  for (const { sha, release } of passed) console.log(`pre-push: ${sha.slice(0, 10)} already passed ${verifyLabel(release)}`);
+}
+
+function commonGitDir(env) {
+  return path.resolve(execFileSync("git", ["rev-parse", "--git-common-dir"], { encoding: "utf8", env }).trim());
 }
 
 // Hooks run with GIT_DIR and friends pointing at this checkout; commands in
@@ -68,7 +104,9 @@ export function verifyCommand(worktree, release) {
 export function runPrePush({ stdin = fs.readFileSync(0, "utf8") } = {}) {
   const env = cleanEnvironment();
   const git = (...args) => execFileSync("git", args, { encoding: "utf8", env }).trim();
-  const commits = commitsToVerify(stdin);
+  const gitDir = commonGitDir(env);
+  const { passed, left: commits } = pushedCommits(stdin, env);
+  reportPassed(passed);
   if (!commits.length) return 0;
   const tooOld = bunTooOld(localBunVersion());
   if (tooOld) {
@@ -82,8 +120,6 @@ export function runPrePush({ stdin = fs.readFileSync(0, "utf8") } = {}) {
   } else {
     console.log(`pre-push: warning: GITHUB_TOKEN is unset and gh has no token; installs from the private registry will fail. ${TOKEN_HINT}`);
   }
-  const gitDir = path.resolve(git("rev-parse", "--git-common-dir"));
-  const verified = readVerified(gitDir);
   // A signal lands while spawnSync waits for a step; the step ends (Ctrl-C
   // reaches its process group too), the temporary worktree is removed, and the
   // hook then exits with the signal's code instead of verifying further commits.
@@ -92,12 +128,8 @@ export function runPrePush({ stdin = fs.readFileSync(0, "utf8") } = {}) {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, stop);
 
   for (const { sha, release } of commits) {
-    const key = `${sha}${release ? " release" : ""}`;
-    const label = `bun run verify${release ? " -- --release" : ""}`;
-    if (verified.has(key)) {
-      console.log(`pre-push: ${sha.slice(0, 10)} already passed ${label}`);
-      continue;
-    }
+    const key = verifiedKey(sha, release);
+    const label = verifyLabel(release);
     const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "repo-kit-pre-push-"));
     console.log(`pre-push: ${label} on ${sha.slice(0, 10)} in ${worktree}`);
     console.log("pre-push: skip once with git push --no-verify");

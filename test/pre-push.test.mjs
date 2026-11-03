@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { syncHooks } from "../src/hooks.mjs";
-import { cleanEnvironment, commitsToVerify, readVerified, verifyCommand } from "../src/pre-push.mjs";
+import { cleanEnvironment, commitsToVerify, pendingCommits, readVerified, verifyCommand } from "../src/pre-push.mjs";
 import { kitRoot, tempRepository } from "./fixtures.mjs";
 
 const sha = digit => digit.repeat(40);
@@ -124,16 +124,43 @@ for (const release of [false, true]) {
       assert.match(lines[0], /^slot:run -n 3 --label /);
       assert.ok(lines.includes("install:fixture-lease:env-token"), lines.join("\n"));
       assert.ok(lines.includes(`verify:bun:verify${release ? " -- --release" : ""}:fixture-lease`), lines.join("\n"));
-      // The second push of the same commit has nothing left to verify.
+      // The second push of the same commit has nothing left to verify, so it
+      // takes no lease: waiting for slots to run nothing held pushes for minutes.
       const again = fixture.run();
       assert.equal(again.result.status, 0);
       assert.match(again.result.stdout, /already passed bun run verify/);
       assert.ok(!again.lines.some(line => line.startsWith("install:")));
+      assert.ok(!again.lines.some(line => line.startsWith("slot:")), again.lines.join("\n"));
     } finally {
       fixture.cleanup();
     }
   });
 }
+
+test("a push of a verified commit and a new one leases once and verifies only the new one", () => {
+  const fixture = pushFixture({ token: "t" });
+  try {
+    assert.equal(fixture.run().result.status, 0);
+    // The same commit pushed to main is a release: not verified yet.
+    const { result, lines } = fixture.run([
+      `refs/heads/lane ${fixture.head} refs/heads/dev ${sha("0")}`,
+      `refs/heads/lane ${fixture.head} refs/heads/main ${sha("0")}`,
+      "",
+    ].join("\n"));
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    assert.equal(lines.filter(line => line.startsWith("slot:")).length, 1, lines.join("\n"));
+    assert.deepEqual(lines.filter(line => line.startsWith("verify:")), ["verify:bun:verify -- --release:fixture-lease"]);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("pendingCommits leaves out the commits the record says passed", () => {
+  const stdin = `refs/heads/a ${sha("a")} refs/heads/dev ${sha("0")}\nrefs/heads/b ${sha("b")} refs/heads/main ${sha("0")}\n`;
+  assert.deepEqual(pendingCommits(stdin, new Set([sha("a")])), [{ sha: sha("b"), release: true }]);
+  assert.deepEqual(pendingCommits(stdin, new Set([sha("a"), sha("b")])), [{ sha: sha("b"), release: true }], "a release needs a release pass");
+  assert.deepEqual(pendingCommits(stdin, new Set([sha("a"), `${sha("b")} release`])), []);
+});
 
 test("an inherited lease reaches install and verify without another lease", () => {
   const fixture = pushFixture({ lease: "outer-lease", token: "t" });
