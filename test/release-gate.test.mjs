@@ -160,6 +160,9 @@ esac
     throw new Error(`unexpected request ${url}`);
   };
   const env = { ...repository.env, PATH: `${bin}:/usr/bin:/bin`, GITHUB_TOKEN: "gate-token", VERIFY_EXIT: verifyExit };
+  // The pre-push hook runs these tests under its own lease; a browsers path
+  // could be set too. Neither may reach the gate under test.
+  for (const name of ["SLOTFATHER_LEASE", "SLOTFATHER_COUNT", "PLAYWRIGHT_BROWSERS_PATH"]) delete env[name];
   const deps = (extra = {}) => ({ env, fetch, tls: () => true, lease: async () => false, platform: "darwin", host: "test-mac", softwareChromium: async () => undefined, ...extra });
   const ran = () => {
     const lines = fs.existsSync(log) ? fs.readFileSync(log, "utf8").split("\n").filter(Boolean).map(line => line.trimEnd()) : [];
