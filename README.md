@@ -6,6 +6,7 @@ Data Grid, Inline Measure, Text Truncate):
 - the verify gate;
 - the pre-push hook;
 - release, publish and changelog checks;
+- the release gate, local or in CI;
 - the slotfather wrapper;
 - the Bun TLS gate;
 - the packed-consumer check;
@@ -101,7 +102,10 @@ export default {
     quickStart: "docs/GETTING_STARTED.md", // archive names checked and moved by release, when the file exists
     peerScope: "@maxvyshniakov/",          // peer ranges checked against workspace versions and exact devDependency pins
   },
-  release: { afterCut({ root, released }) {} }, // runs after the version is cut, before bun install
+  release: {
+    gate: "local",  // what publish requires: "local" (default), a passed `repo-kit release-gate`; "ci", the checks workflow
+    afterCut({ root, released }) {}, // runs after the version is cut, before bun install
+  },
   packedConsumer: {
     versionSources: ["packages/sid-kit/package.json", "package.json"], // exact pins for consumer packages
     dependencies: ["vite"],
@@ -148,11 +152,98 @@ Re-measure after a change that adds tests or stories; a peak above its declared 
 | `check` | `hooks check`. Every `maxvyshniakov/repo-kit/...@` reference in `.github/workflows` names the installed version. `packageManager` names `bun@1.4.4`. |
 | `check-changelogs [--release]` | Changelog format, version agreement (`package.json`, the newest release, `bun.lock`, quick start archives) and peer ranges. `--release`: no unreleased entries. |
 | `release [<package>:]<patch\|minor\|major\|x.y.z> [--date=]` | Cuts `## Unreleased` into a version; sets `package.json`, `bun.lock` and the quick start. |
-| `publish [--resume]` | TLS gate; HEAD must be `origin/main` by SHA (any branch, worktree or detached HEAD); waits for the checks workflow on that commit (not inside Actions); publishes, checks the registry serves the version, tags `v<version>` (GH007 recovery printed when the tag push is declined), then requests `publish.notify`. `--resume` finishes a partial publication. |
+| `release-gate [<ref>] [--rerun] [--no-attest]` | The local [release gate](#release-gate) on a commit (default `HEAD`): a clean worktree, frozen install, `verify --release`, `verify --browser` with Chromium in software compositing, the TLS gate; records the commit status `Library checks (local, <platform>)`. `--mode` prints `release.gate`. |
+| `ci-gate` | In a workflow job that needs the checks (`deploy-storybook.yml`): writes `run=true` under gate `local`, or under gate `ci` when every job in `REPO_KIT_NEEDS` (the caller's `toJSON(needs)`) passed. |
+| `publish [--resume]` | TLS gate; HEAD must be `origin/main` by SHA (any branch, worktree or detached HEAD); the [release gate](#release-gate) on that commit: a passed `release-gate` status (gate `local`) or the checks workflow (gate `ci`), not inside Actions; publishes, checks the registry serves the version, tags `v<version>` (GH007 recovery printed when the tag push is declined), then requests `publish.notify`. `--resume` finishes a partial publication. |
 | `notify` | Requests `publish.notify`'s workflows again. |
 | `heavy <slots\|all> <command...>` | Runs a command under `slotfather run -n <slots>` when slotfather is on PATH and no lease is held; otherwise directly. |
 | `tls` | The TLS gate (below). |
 | `packed-consumer [--keep]` | Packs, installs into a temporary consumer, imports every entrypoint in plain Node, type-checks under `nodenext` without `skipLibCheck`, then runs the probes. |
+
+## Release gate
+
+`publish` publishes a commit only after the release gate passed on it. `repo-kit.config.mjs` chooses the gate with one
+line:
+
+```js
+export default {
+  release: { gate: "local" }, // the default: a local run of repo-kit release-gate on this Mac
+  // release: { gate: "ci" }, // the checks workflow on the homelab runner, as before release.gate existed
+};
+```
+
+Gate `local` is the default, chosen on 2026-11-03: over 33 days the homelab runner's 52 failed attempts were 24
+infrastructure, 19 flaky and 7 CI-only plumbing failures, none of them a defect the local gate would miss, and two
+real library defects. Both were Sid-Kit ScrollArea defects that broke only under Chromium's software compositing on
+Linux, which a GPU-rendered Mac run did not catch. The local gate runs its browser checks in software compositing for
+that reason. Switch to `ci` when a second contributor joins, or whenever releases must not depend on one machine.
+
+### Gate `local`
+
+```sh
+git fetch origin && bunx repo-kit release-gate origin/main   # after the release commit is pushed
+bun run release:publish
+```
+
+`repo-kit release-gate [<ref>]` (default `HEAD`) runs under one slotfather lease (the larger of `verify.slots` and
+`verify.browserSlots`):
+
+1. the TLS gate, the Bun floor and the token, before any install;
+2. a clean temporary worktree of the exact commit and `bun install --frozen-lockfile`;
+3. when the commit has Playwright: `bunx playwright install --no-shell chromium` (as `browser.yml` does), then a mirror
+   of Playwright's browsers directory in which every Chromium executable starts the real one with `--disable-gpu`.
+   Every check that starts Playwright's Chromium (Playwright's `launch`, agent-browser behind a repository's wrapper,
+   a check's own `chromium.launch`) runs through it, because the gate points `PLAYWRIGHT_BROWSERS_PATH` at the mirror.
+   Before the checks, the gate asks the wrapped Chromium (DevTools `SystemInfo.getInfo`) and stops unless it reports
+   `gpu_compositing: disabled_software`; on this Mac the same Chromium reports `enabled` (Metal) without the switch.
+   `REPO_KIT_CHROMIUM_SWITCHES` names the switches for a runner that starts a browser of its own;
+4. `bun run verify -- --release`;
+5. `bun run verify -- --browser` when the commit's config declares `verify.browser`. The gate fails if that starts no
+   Chromium through the mirror, and fails if the commit declares browser checks but has no Playwright.
+
+On a pass it records the commit status `Library checks (local, macOS)` with a summary: host, duration, kit version,
+the number of software-compositing Chromium launches, and the local log, `.git/repo-kit-gate/<sha>.log`. A failure
+records `failure`. Without a token with `repo` scope it refuses to start.
+
+A commit that passed is listed in `.git/repo-kit-gate/passed` and is not run again: a commit GitHub did not have yet
+passes, and the run after the push only records its status. `--rerun` runs it again; `--no-attest` records nothing on
+GitHub.
+
+`publish` reads the commit's newest `Library checks (local, …)` status and refuses unless it is `success`: missing,
+pending and failed statuses each name the command to run. Inside GitHub Actions, as in Data Grid's automated catalog
+release, the calling workflow's jobs gate the publication under either gate; publish says so.
+
+Replayed on Sid-Kit `8f6695c^` (before the rounded scroll clip fix), `check-scroll-fade-edges` passes on this Mac's GPU
+path and fails through the mirror with the CI failure's assertion; at `8f6695c` it passes through the mirror.
+
+### Gate `ci`
+
+`release: { gate: "ci" }` restores the behaviour from before `release.gate` existed: `publish` waits for `publish.checks`
+(`check.yml`) on the commit and refuses when it failed, was cancelled or never started; `publish.checks: false` skips
+the wait with a warning. `release-gate` still runs, and its status is for information only.
+
+### The workflows under each gate
+
+The workflows stay in both modes and run on the homelab runner as before. Under gate `local` they are advisory:
+nothing waits for them.
+
+| Job | Gate `local` | Gate `ci` |
+|---|---|---|
+| `check.yml`: `verify.yml`, `browser.yml` | advisory | `publish` waits for the run |
+| `deploy-storybook.yml` | runs whatever the checks concluded (`repo-kit ci-gate`) | runs only after every needed job passed |
+| Data Grid's `dependency-release` (`release.yml`) | stays behind its own check jobs in CI | the same |
+
+The deploy and Data Grid's catalog automation stay in CI because they need the `storybook` environment's Cloudflare
+token and the workflow's registry token there. They do not gate anything. For the deploy to run after a failed check,
+its caller job needs `if: ${{ !cancelled() && … }}` and `needs: ${{ toJSON(needs) }}` (see [Workflows](#workflows));
+a caller left as before still deploys only after its checks passed. A deploy could also run from the Mac
+(`bun run storybook:prepare-deploy && bun run storybook:deploy` with `CLOUDFLARE_API_TOKEN` set), which would take
+the runner out of the release path entirely; it is not wired up.
+
+No branch protection or ruleset requires any check: GitHub offers neither for private repositories on this account's
+plan (the API answers 403, "Upgrade to GitHub Pro"), so the commit statuses are the only record and `publish` the only
+enforcement. If protection is enabled later, require `Library checks (local, macOS)` under gate `local`, or the
+`check.yml` jobs under gate `ci`, not both.
 
 ## GITHUB_TOKEN
 
@@ -163,7 +254,8 @@ repositories needs it, now including repo-kit itself:
   to publish (`gh auth refresh -s write:packages`).
 - **pre-push hook:** installs in a temporary worktree. When `GITHUB_TOKEN` is unset, it uses `gh auth token`. Without
   either it warns, and a failed install names the fix.
-- **publish:** also falls back to `gh auth token`.
+- **publish** and **release-gate:** also fall back to `gh auth token`. The release gate's commit status needs `repo`
+  scope (`gh` grants it by default).
 - **CI:** the workflow token. The caller grants `packages: read`, and the package's Actions access lists the repository
   (Package settings → Manage Actions access).
 
@@ -188,8 +280,8 @@ verification. Do not disable certificate verification.
 
 ## Workflows
 
-The caller keeps `.github/workflows/check.yml` (publish waits for it), with its triggers, concurrency and
-permissions, and calls the reusable workflows at the installed kit's tag:
+The caller keeps `.github/workflows/check.yml` (publish waits for it under gate `ci`; under gate `local` it is
+advisory), with its triggers, concurrency and permissions, and calls the reusable workflows at the installed kit's tag:
 
 ```yaml
 name: Library checks
@@ -211,12 +303,15 @@ jobs:
     uses: maxvyshniakov/repo-kit/.github/workflows/browser.yml@v0.2.3
     with:
       checks: '[{"name": "stories", "run": "bun run check:stories -- --no-build"}]'
+  # !cancelled() lets the deploy start when a check failed; repo-kit ci-gate then
+  # deploys under release.gate "local" and does nothing under "ci".
   deploy:
     needs: [check, browser]
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     uses: maxvyshniakov/repo-kit/.github/workflows/deploy-storybook.yml@v0.2.3
     with:
       url: https://sid-kit.maxvyshniakov.com
+      needs: ${{ toJSON(needs) }}
     secrets: inherit   # the job reads STORYBOOK_CLOUDFLARE_API_TOKEN from the storybook environment
 ```
 
@@ -224,7 +319,7 @@ jobs:
 |---|---|
 | `verify.yml` | `args` (none; `--release` is added for `main` and pull requests into `main`), `slots` (`all`), `slot-wait` (0: wait as long as the job runs), `runner`, `timeout-minutes` (20) |
 | `browser.yml` | `checks` (JSON list of `{name, run}`), `build`, `playwright` (true), `slots` (`all`: the build and every check lease them together), `slot-wait` (0), `runner`, `timeout-minutes` (45: the wait, the build and every check) |
-| `deploy-storybook.yml` | `url`, `environment` (`storybook`), `slots` (`all`, for the builds and `storybook:prepare-deploy`), `slot-wait` (0), `timeout-minutes` (30); `STORYBOOK_CLOUDFLARE_API_TOKEN` from that environment, with `secrets: inherit` |
+| `deploy-storybook.yml` | `url`, `needs` (the caller's `toJSON(needs)`, for `repo-kit ci-gate`; default `{}`), `environment` (`storybook`), `slots` (`all`, for the builds and `storybook:prepare-deploy`), `slot-wait` (0), `timeout-minutes` (30); `STORYBOOK_CLOUDFLARE_API_TOKEN` from that environment, with `secrets: inherit` |
 | `release.yml` | `command` (`bun run release:publish`), `enabled` (true), `slots` (`all`), `slot-wait` (0), `runner`, `timeout-minutes` (30); the caller grants `contents: write`, `packages: write` |
 
 Every heavy step of these workflows runs under a slotfather lease where the runner has slotfather: `verify`, the
@@ -242,7 +337,7 @@ could not run side by side with another anyway, and each built Storybook again (
 Jobs show as `<caller job> / <reusable job>`, for example `check / verify`, `browser / browser + stories` (named by
 its checks) and `deploy / Publish private Storybook`.
 
-A cancelled run counts as failed for `publish`, so `cancel-in-progress` covers pull requests only.
+A cancelled run counts as failed for `publish` under gate `ci`, so `cancel-in-progress` covers pull requests only.
 
 `actions/setup-bun` installs Bun 1.4.4, runs the TLS gate, then `bun install --frozen-lockfile` with `token`.
 Jobs that do not use a reusable workflow call it directly:
@@ -263,8 +358,9 @@ A release:
    reference in the workflows and this README to the new tag. The reusable workflows reference the action at that
    tag, which `publish` creates on the release commit.
 2. Push the release commit to `dev` and `main`.
-3. Run `bun run release:publish` once Library checks pass on `main`. repo-kit's own checks use `./actions/setup-bun`
-   from the commit itself, so they run before the tag exists.
+3. Run `bun run repo-kit release-gate origin/main`, then `bun run release:publish` (gate `local`, this repository's
+   default). Under gate `ci`, run `release:publish` once Library checks pass on `main`; repo-kit's own checks use
+   `./actions/setup-bun` from the commit itself, so they run before the tag exists.
 4. Raise the pinned version in each repository and run `bun run repo-kit hooks sync`. Update the workflow references;
    `repo-kit check` fails until they match.
 

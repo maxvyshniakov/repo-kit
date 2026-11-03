@@ -12,6 +12,10 @@ const USAGE = `Usage: repo-kit <command>
   check                            managed hooks, workflow references and packageManager match the kit
   check-changelogs [--release]
   release [<package>:]<level> [--date=YYYY-MM-DD]
+  release-gate [<ref>] [--rerun] [--no-attest]
+                                   the local release gate on a commit (default HEAD); records its commit status
+  release-gate --mode              print release.gate: local or ci
+  ci-gate                          in a workflow: whether a job that needs the checks runs (REPO_KIT_NEEDS)
   publish [--resume]
   notify                           request publish.notify's workflows again
   tls                              the Bun TLS gate
@@ -78,6 +82,15 @@ export async function main([command, ...args]) {
     case "release": {
       const { runRelease } = await import("./release.mjs");
       return runRelease(config, args);
+    }
+    case "release-gate": {
+      const { releaseGate, runReleaseGate } = await import("./release-gate.mjs");
+      if (args.includes("--mode")) return console.log(releaseGate(config)), 0;
+      return runReleaseGate(config, args);
+    }
+    case "ci-gate": {
+      const { runCiGate } = await import("./release-gate.mjs");
+      return runCiGate(config);
     }
     case "publish": {
       const { runPublish } = await import("./publish.mjs");

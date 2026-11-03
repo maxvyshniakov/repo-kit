@@ -4,14 +4,19 @@
 // HEAD), after `bun run release` was pushed. GITHUB_TOKEN (or `gh auth token`)
 // needs write:packages:
 //
-//   bun run release:publish               TLS gate, wait for the checks workflow, publish, tag, notify
+//   bun run release:publish               TLS gate, the release gate, publish, tag, notify
 //   bun run release:publish -- --resume   finish a publication whose tag or tag push failed
+//
+// The release gate is release.gate in repo-kit.config.mjs (release-gate.mjs):
+// "local" (the default) requires a passed `repo-kit release-gate` status on the
+// commit; "ci" waits for the checks workflow (publish.checks) on it.
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 
 import { changelogIssues, changelogPackages } from "./check-changelogs.mjs";
 import { notifyAll } from "./notify.mjs";
+import { attestationRefusal, publishGatePlan, readAttestation, releaseGate } from "./release-gate.mjs";
 import { runTlsGate } from "./tls.mjs";
 import { resolveToken } from "./token.mjs";
 
@@ -137,6 +142,7 @@ export async function runPublish(config, { resume = false } = {}) {
   const [pkg, ...others] = changelogPackages(root, { quickStart: config.changelog.quickStart });
   if (!pkg || others.length) return fail(["Not publishing: expected exactly one released package (the root package or one under packages/)."]);
   const tag = `v${pkg.version}`;
+  const gate = releaseGate(config);
   // Before the token reaches any request.
   if (!runTlsGate()) return fail([`Not publishing ${pkg.name}@${pkg.version}: the TLS gate failed (README.md#tls-gate).`]);
   const { token, source } = resolveToken();
@@ -199,12 +205,21 @@ export async function runPublish(config, { resume = false } = {}) {
     return pushTag();
   }
   // In Actions, a publication inside the checks workflow runs after its check
-  // jobs; waiting for that run to finish would never end.
+  // jobs; waiting for that run to finish would never end. Under either gate the
+  // calling workflow's own jobs gate it (Data Grid's automated catalog release).
   // publish.checks: false is for a repository whose checks cannot run yet (no
-  // runner); its pre-push gate is then the only gate, and publish says so.
-  if (action === "publish" && workflow === false) {
+  // runner); under gate ci its pre-push gate is then the only gate, and publish
+  // says so.
+  const plan = action === "publish" ? publishGatePlan({ gate, checks: workflow, inActions: Boolean(process.env.GITHUB_ACTIONS) }) : "none";
+  if (plan === "attestation") {
+    const attestation = await readAttestation(githubRepository(git("remote", "get-url", "origin")), head, token);
+    if (attestation.state !== "passed") return fail([`Not publishing ${pkg.name}@${pkg.version}: ${attestationRefusal(attestation, head)[0]}`, ...attestationRefusal(attestation, head).slice(1)]);
+    console.log(`${attestation.status.context} passed on ${head.slice(0, 7)}: ${attestation.status.description}`);
+  } else if (plan === "actions" && gate === "local") {
+    console.log(`Inside GitHub Actions: the calling workflow's jobs gate ${head.slice(0, 7)}; release.gate "local" applies to publications from a machine.`);
+  } else if (plan === "unchecked") {
     console.warn(`publish.checks is false: publishing ${head.slice(0, 7)} without waiting for a checks workflow; the pre-push gate was the only gate.`);
-  } else if (action === "publish" && !process.env.GITHUB_ACTIONS) {
+  } else if (plan === "workflow") {
     const checks = await waitForChecks(githubRepository(git("remote", "get-url", "origin")), workflow, head, token);
     if (checks.state !== "passed") {
       return fail([

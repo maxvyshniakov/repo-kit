@@ -6,7 +6,7 @@
 //     prePush: { slots: 3 },
 //     publish: { checks: "check.yml", notify: [{ repository, workflow, ref }] },
 //     changelog: { quickStart: "docs/GETTING_STARTED.md", peerScope: "@maxvyshniakov/" },
-//     release: { afterCut({ root, packages }) {} },
+//     release: { gate: "local", afterCut({ root, packages }) {} },
 //     packedConsumer: { ... },
 //   };
 import fs from "node:fs";
@@ -59,7 +59,8 @@ export function withDefaults(config) {
     prePush: { slots: 1, ...config.prePush },
     publish: { checks: "check.yml", notify: [], ...config.publish },
     changelog: { quickStart: "docs/GETTING_STARTED.md", peerScope: "@maxvyshniakov/", ...config.changelog },
-    release: { ...config.release },
+    // gate: "local" (repo-kit release-gate's attestation) or "ci" (the checks workflow); README.md#release-gate.
+    release: { gate: "local", ...config.release },
     packedConsumer: { ...config.packedConsumer },
   };
 }

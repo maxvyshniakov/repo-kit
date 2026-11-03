@@ -68,7 +68,7 @@ test("browser.yml builds once and runs every check after it in one job, under on
 test("every heavy step of the reusable workflows runs under a lease of the whole runner by default", () => {
   const leased = {
     "verify.yml": /- run: bun run verify -- \$RELEASE_ARGS \$VERIFY_ARGS\n/,
-    "deploy-storybook.yml": /- run: node_modules\/\.bin\/repo-kit heavy "\$SLOTS" sh -c 'bun run build && bun run storybook:build'\n/,
+    "deploy-storybook.yml": /run: node_modules\/\.bin\/repo-kit heavy "\$SLOTS" sh -c 'bun run build && bun run storybook:build'\n/,
     "browser.yml": /- run: node_modules\/\.bin\/repo-kit heavy "\$SLOTS" sh -c 'eval "\$BUILD" && node_modules\/\.bin\/repo-kit checks'\n/,
     "release.yml": /run: node_modules\/\.bin\/repo-kit heavy "\$SLOTS" sh -c 'eval "\$COMMAND"'\n/,
   };
@@ -81,7 +81,7 @@ test("every heavy step of the reusable workflows runs under a lease of the whole
     assert.doesNotMatch(text, /- run: (bun run (build|storybook:build|storybook:prepare-deploy)|eval "\$(BUILD|CHECK|COMMAND)")\n/, `${file} runs a heavy step outside the lease`);
   }
   // prepare-deploy installs and builds the retained releases' Storybooks: heavy.
-  assert.match(read(path.join(workflowsDir, "deploy-storybook.yml")), /- run: node_modules\/\.bin\/repo-kit heavy "\$SLOTS" bun run storybook:prepare-deploy\n/);
+  assert.match(read(path.join(workflowsDir, "deploy-storybook.yml")), /run: node_modules\/\.bin\/repo-kit heavy "\$SLOTS" bun run storybook:prepare-deploy\n/);
   // verify leases itself: the workflow tells it how many slots.
   assert.match(read(path.join(workflowsDir, "verify.yml")), /REPO_KIT_VERIFY_SLOTS: \$\{\{ inputs\.slots \}\}\n/);
 });
@@ -138,4 +138,22 @@ test("the Storybook deploy reads the Cloudflare token from its environment, by n
   assert.equal(text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.STORYBOOK_CLOUDFLARE_API_TOKEN \}\}/g)?.length, 2);
   assert.ok(text.indexOf("Require the environment's Cloudflare token") < text.indexOf("bun run storybook:deploy"));
   assert.match(read(path.join(kitRoot, "README.md")), /deploy-storybook\.yml@v[\d.]+\n(?: {4}.*\n)*? {4}secrets: inherit/);
+});
+
+test("the Storybook deploy follows release.gate: it runs whatever the checks concluded under local, only after they passed under ci", () => {
+  const text = read(path.join(workflowsDir, "deploy-storybook.yml"));
+  // The caller passes toJSON(needs); without it the caller's own needs order the deploy, as before.
+  assert.match(text, /\n      needs:\n(?: {8}.*\n)*? {8}type: string\n {8}default: "\{\}"\n/);
+  const gate = text.indexOf("- id: gate\n        run: node_modules/.bin/repo-kit ci-gate\n");
+  assert.ok(gate > 0, "the gate step runs repo-kit ci-gate");
+  assert.match(text, /REPO_KIT_NEEDS: \$\{\{ inputs\.needs \}\}\n/);
+  assert.ok(gate > text.indexOf("uses: maxvyshniakov/repo-kit/actions/setup-bun@"), "it reads the installed kit's config");
+  // Every step after the gate runs only when it says so.
+  const after = text.slice(gate).split("\n      - ").slice(1);
+  assert.ok(after.length >= 3, after.join("\n---\n"));
+  for (const step of after) assert.match(step, /^if: steps\.gate\.outputs\.run == 'true'\n/, step);
+  // The README's caller lets the deploy start when a check failed, so the gate decides.
+  const readme = read(path.join(kitRoot, "README.md"));
+  assert.match(readme, /if: \$\{\{ !cancelled\(\) && github\.ref == 'refs\/heads\/main'/);
+  assert.match(readme, /needs: \$\{\{ toJSON\(needs\) \}\}/);
 });

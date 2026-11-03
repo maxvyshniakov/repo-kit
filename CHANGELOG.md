@@ -4,6 +4,20 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+### Breaking
+
+- `release:publish` requires the release gate chosen by `release.gate` in `repo-kit.config.mjs`. The default, `"local"`, requires a passed `repo-kit release-gate` status (`Library checks (local, macOS)`) on the commit it publishes and refuses without one, naming the command to run; it no longer waits for the checks workflow. `release: { gate: "ci" }` restores the old behaviour exactly: publish waits for `publish.checks` on the commit. No consumer needs a config change to adopt the local gate; a repository that keeps CI as its gate adds that one line. Owner decision 2026-11-03: over 33 days the homelab runner's 52 failed attempts held 2 real library defects and delayed about 9 releases. Inside GitHub Actions (Data Grid's automated catalog release) the calling workflow's jobs still gate publication under either gate.
+
+### Added
+
+- `repo-kit release-gate [<ref>]`: the local release gate on a commit (default `HEAD`), under one slotfather lease. The TLS gate, then a clean temporary worktree of the exact commit, `bun install --frozen-lockfile`, `verify --release`, and `verify --browser` when the commit declares browser checks. A pass or a failure is recorded as the commit status `Library checks (local, <platform>)`, with the host, duration, kit version and the local log (`.git/repo-kit-gate/<sha>.log`). A commit that passed is not run again, so the run after pushing a commit GitHub did not have yet only records its status. `--rerun` runs it again, `--no-attest` records nothing, and `--mode` prints the configured gate.
+- The release gate runs every check against Playwright's Chromium with software compositing (`--disable-gpu`), as on the Linux CI runner. It points `PLAYWRIGHT_BROWSERS_PATH` at a mirror whose Chromium executables add the switch, so Playwright launches, agent-browser behind a repository's wrapper and a check's own `chromium.launch` all get it without changes in the repository. Before the checks it asks that Chromium over DevTools and stops unless `gpu_compositing` is `disabled_software`; on this Mac it reports `enabled` (Metal) without the switch. It also fails when browser checks start no Chromium through the mirror. Replayed on Sid-Kit before its rounded scroll clip fix, `check-scroll-fade-edges` passes on the Mac's GPU path and fails through the mirror, as it failed on CI.
+- `repo-kit ci-gate` and a `needs` input on `deploy-storybook.yml`: with the caller's `toJSON(needs)` and `!cancelled()` in its `if`, the Storybook deploy runs whatever the checks concluded under gate `local` and only after every needed job passed under gate `ci`. A caller left as before still deploys only after its checks passed.
+
+### Changed
+
+- README: a "Release gate" section on both gates, the one-line switch, how the workflows relate to each gate, and why no branch protection requires a check (the repositories' plan offers none).
+
 ## 0.2.3 - 2026-11-03
 
 ### Added

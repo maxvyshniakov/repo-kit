@@ -176,3 +176,19 @@ test("publication requests each configured workflow, and a failed request is rec
   })), false);
   assert.equal(requested.length, 2, "a failed request does not stop the next one");
 });
+
+test("publish follows release.gate: the local attestation before bun publish, or the checks workflow under ci", () => {
+  const source = readFileSync(new URL("../src/publish.mjs", import.meta.url), "utf8");
+  const plan = source.indexOf("publishGatePlan({");
+  const attestation = source.indexOf('plan === "attestation"');
+  const workflowWait = source.indexOf('plan === "workflow"');
+  const bunPublish = source.indexOf("publishArguments(fs.existsSync(bunfig)");
+  assert.ok(plan > 0 && attestation > plan && workflowWait > plan, "one plan decides the gate");
+  assert.ok(attestation < bunPublish && workflowWait < bunPublish, "every gate comes before bun publish");
+  // A missing, pending or failed attestation refuses; it never skips silently.
+  const branch = source.slice(attestation, source.indexOf("} else if", attestation));
+  assert.match(branch, /readAttestation\(/);
+  assert.match(branch, /if \(attestation\.state !== "passed"\) return fail\(/);
+  // The gate is read before the TLS gate, so a mistyped release.gate fails first.
+  assert.ok(source.indexOf("releaseGate(config)") < source.indexOf("runTlsGate()"));
+});
