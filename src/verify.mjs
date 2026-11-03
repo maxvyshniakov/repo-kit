@@ -528,7 +528,8 @@ function startProcess(step, { root, running, mark, processes = () => [] }) {
     // A step past its timeout fails, and its whole tree is stopped: SIGTERM,
     // then SIGKILL. Its output may stay open in a process outside the tree, so
     // verify stops waiting for it a little after that.
-    if (step.timeout > 0) {
+    // Past setTimeout's range (about 24 days), Infinity included, is no limit.
+    if (step.timeout > 0 && step.timeout * 60_000 < 2 ** 31) {
       timers.push(setTimeout(() => {
         // A step stopped already that still runs is killed the same way.
         if (!handle.stopped) {

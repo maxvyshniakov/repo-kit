@@ -420,12 +420,30 @@ exec sleep 60
   }
 });
 
+test("a timeout of Infinity is no limit, not setTimeout's immediate overflow", () => {
+  const repository = tempRepository({
+    "package.json": { name: "fake", version: "0.0.0", type: "module" },
+    "repo-kit.config.mjs": `export default { verify: { stepTimeout: Infinity, steps: [{ name: "slow", command: ["run", "slow"] }] } };\n`,
+  });
+  try {
+    fs.mkdirSync(path.join(repository.root, "bin"));
+    fs.writeFileSync(path.join(repository.root, "bin/bun"), "#!/bin/sh\nsleep 0.5\n", { mode: 0o755 });
+    const env = { ...process.env, PATH: `${path.join(repository.root, "bin")}:${process.env.PATH}`, REPO_KIT_VERIFY_CORES: "2", REPO_KIT_VERIFY_MEMORY_GIB: "16", SLOTFATHER_LEASE: "test" };
+    const result = spawnSync(process.execPath, [cli, "verify"], { cwd: repository.root, env, encoding: "utf8", timeout: 20_000 });
+    assert.equal(result.status, 0, result.stdout);
+    assert.doesNotMatch(result.stdout, /timed out/);
+  } finally {
+    repository.cleanup();
+  }
+});
+
 test("steps time out after verify.stepTimeout minutes, 15 unless set", () => {
   assert.equal(withDefaults({}).verify.stepTimeout, 15);
   assert.throws(() => normalizeSteps([{ name: "a", command: [], timeout: -1 }]), /timeout is minutes/);
   assert.equal(normalizeSteps([{ name: "a", command: [] }], { stepTimeout: 15 })[0].timeout, 15);
   assert.equal(normalizeSteps([{ name: "a", command: [], timeout: 40 }], { stepTimeout: 15 })[0].timeout, 40);
   assert.equal(normalizeSteps([{ name: "a", command: [], timeout: 0 }], { stepTimeout: 15 })[0].timeout, 0, "0: no limit");
+  assert.equal(normalizeSteps([{ name: "a", command: [] }], { stepTimeout: Infinity })[0].timeout, Infinity);
   const config = withDefaults({ verify: { stepTimeout: 5, steps: [{ name: "a", command: [] }] } });
   assert.equal(verifySteps(config)[0].timeout, 5);
 });
