@@ -6,6 +6,7 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ### Fixed
 
+- A step's measured peak counts its whole process tree: its process group, every descendant by parent pid, and processes it started that were since reparented. Browsers that start sessions of their own (Chromium, agent-browser) used to fall outside the group, so Sid-Kit's browser checks read 0.4 GiB while the runner peaked at 8.85 GB (straylight#656). On Linux the summary also shows the job cgroup's peak: `memory.peak`, reset for the run where the kernel allows (6.12 and later), else the per-second samples of `memory.current`; it includes page cache.
 - The pre-push hook works out which pushed commits have not passed before it takes its lease, and takes none when every one has. A push of commits that had passed used to wait for `prePush.slots` like a real verification: on this Mac pushes at 3 slots waited 1071–2426 s to run for 2–38 s (straylight#656).
 
 ## 0.2.2 - 2026-11-03

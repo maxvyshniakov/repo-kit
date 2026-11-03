@@ -15,9 +15,13 @@
 // (verifyCores), less what the steps beside it keep busy, and no more workers
 // than half the run's memory holds (verifyMemory), as VITEST_MAX_WORKERS and
 // REPO_KIT_WORKERS; a step with `workers` gets that fixed count. The summary
-// shows each step's measured peak memory beside the figure it declares.
+// shows each step's measured peak memory beside the figure it declares: the
+// resident memory of its whole process tree, browsers in sessions of their own
+// included, and on Linux the job cgroup's peak.
 import { execFile, execFileSync, spawn } from "node:child_process";
+import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 
 // Cores the steps beside a usesCores step keep busy while it runs.
 const RESERVED_CORES = 2;
@@ -193,31 +197,151 @@ export async function runSteps(steps, start, { now = Date.now, signal, memory = 
 }
 
 /**
- * Samples the resident memory of every running step's process group once a
- * second; `stop()` returns the highest total (GiB), each step's share of it,
- * and each step's own peak (`each`), the figure its `memory` declares.
+ * Each step's processes in one process table ({ pid, ppid, pgid, rss } rows,
+ * rss in KiB): its process group, every descendant of its first process by
+ * parent pid (Chromium and agent-browser start sessions of their own, outside
+ * the group), and every process an earlier sample found in it that is still
+ * running (one reparented to init has left the tree). `roots` maps each running
+ * step's first pid, its group, to its name; `members` (name -> Set of pids)
+ * carries what earlier samples found. Returns name -> { pids, gib }.
  */
-function sampleMemory(groups) {
+export function stepProcesses(table, roots, members = new Map()) {
+  const byPid = new Map(table.map(row => [row.pid, row]));
+  const children = new Map();
+  for (const row of table) children.set(row.ppid, [...(children.get(row.ppid) ?? []), row.pid]);
+  const found = new Map();
+  for (const [root, name] of roots) {
+    const known = [...(members.get(name) ?? [])].filter(pid => byPid.has(pid));
+    const stack = [root, ...known, ...table.filter(row => row.pgid === root).map(row => row.pid)].filter(pid => byPid.has(pid));
+    const pids = new Set();
+    while (stack.length) {
+      const pid = stack.pop();
+      if (pids.has(pid)) continue;
+      pids.add(pid);
+      stack.push(...(children.get(pid) ?? []));
+    }
+    members.set(name, pids);
+    let kib = 0;
+    for (const pid of pids) kib += byPid.get(pid).rss;
+    found.set(name, { pids, gib: (kib * 1024) / GiB });
+  }
+  for (const name of members.keys()) if (![...roots.values()].includes(name)) members.delete(name);
+  return found;
+}
+
+/** The machine's process table, for stepProcesses. */
+function parseProcessTable(output) {
+  const table = [];
+  for (const line of output.split("\n")) {
+    const [pid, ppid, pgid, rss] = line.trim().split(/\s+/).map(Number);
+    if (pid > 0) table.push({ pid, ppid, pgid, rss: rss || 0 });
+  }
+  return table;
+}
+
+const PS_ARGS = ["-A", "-o", "pid=,ppid=,pgid=,rss="];
+
+/** The pids a step runs now (stepProcesses), read synchronously, to stop all of them. */
+export function stepTree(root) {
+  try {
+    const table = parseProcessTable(execFileSync("ps", PS_ARGS, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+    return [...stepProcesses(table, new Map([[root, "step"]])).get("step").pids];
+  } catch {
+    return [root];
+  }
+}
+
+/**
+ * The job's cgroup (cgroup v2, this process's, from /proc/self/cgroup) on
+ * Linux, for the summary: the memory of everything in the job, its page cache
+ * included. memory.peak is reset for this reader where the kernel allows it
+ * (6.12 and later), so it covers this run alone; elsewhere the samples of
+ * memory.current give the peak. `sample()` takes one, `stop()` returns { gib,
+ * source }. Undefined off Linux and where the cgroup has no memory files.
+ */
+export function cgroupMemory({ proc = "/proc/self/cgroup", root = "/sys/fs/cgroup" } = {}) {
+  let group;
+  try {
+    group = fs.readFileSync(proc, "utf8").split("\n").find(line => line.startsWith("0::"))?.slice(3).trim();
+  } catch {
+    return undefined;
+  }
+  if (!group) return undefined;
+  const dir = path.join(root, group);
+  const read = file => {
+    try {
+      const bytes = Number.parseInt(fs.readFileSync(path.join(dir, file), "utf8"), 10);
+      return Number.isFinite(bytes) ? bytes : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  if (read("memory.current") === undefined) return undefined;
+  let peakFd;
+  try {
+    peakFd = fs.openSync(path.join(dir, "memory.peak"), "r+");
+    fs.writeSync(peakFd, "reset\n");
+  } catch {
+    if (peakFd !== undefined) fs.closeSync(peakFd);
+    peakFd = undefined;
+  }
+  let sampled = 0;
+  return {
+    path: group,
+    sample() {
+      sampled = Math.max(sampled, read("memory.current") ?? 0);
+    },
+    stop() {
+      this.sample();
+      if (peakFd !== undefined) {
+        try {
+          const buffer = Buffer.alloc(64);
+          const bytes = Number.parseInt(buffer.toString("utf8", 0, fs.readSync(peakFd, buffer, 0, 64, 0)), 10);
+          if (Number.isFinite(bytes)) return { gib: Math.max(bytes, sampled) / GiB, source: "memory.peak" };
+        } catch {
+          // fall back to the samples
+        } finally {
+          fs.closeSync(peakFd);
+          peakFd = undefined;
+        }
+      }
+      return { gib: sampled / GiB, source: "memory.current" };
+    },
+  };
+}
+
+/**
+ * Samples the resident memory of every running step's processes
+ * (stepProcesses) once a second, and the job's cgroup where there is one;
+ * `stop()` returns the highest total (GiB), each step's share of it, each
+ * step's own peak (`each`), the figure its `memory` declares, and the cgroup's
+ * peak (`cgroup`).
+ */
+function sampleMemory(roots, { cgroup = cgroupMemory() } = {}) {
   let peak = { total: 0, steps: {} };
   const each = {};
-  const sample = () => execFile("ps", ["-A", "-o", "pgid=,rss="], (error, output) => {
-    if (error) return;
-    const byGroup = new Map();
-    for (const line of output.split("\n")) {
-      const [pgid, rss] = line.trim().split(/\s+/).map(Number);
-      if (pgid && rss) byGroup.set(pgid, (byGroup.get(pgid) ?? 0) + (rss * 1024) / GiB);
-    }
-    const steps = {};
-    for (const [pgid, name] of groups) {
-      steps[name] = byGroup.get(pgid) ?? 0;
-      each[name] = Math.max(each[name] ?? 0, steps[name]);
-    }
-    const total = Object.values(steps).reduce((sum, gib) => sum + gib, 0);
-    if (total > peak.total) peak = { total, steps };
-  });
+  const members = new Map();
+  const sample = () => {
+    cgroup?.sample();
+    execFile("ps", PS_ARGS, (error, output) => {
+      if (error) return;
+      const steps = {};
+      for (const [name, { gib }] of stepProcesses(parseProcessTable(output), roots, members)) {
+        steps[name] = gib;
+        each[name] = Math.max(each[name] ?? 0, gib);
+      }
+      const total = Object.values(steps).reduce((sum, gib) => sum + gib, 0);
+      if (total > peak.total) peak = { total, steps };
+    });
+  };
   const timer = setInterval(sample, 1000);
   timer.unref();
-  return { stop: () => (clearInterval(timer), { ...peak, each }) };
+  return {
+    stop: () => {
+      clearInterval(timer);
+      return { ...peak, each, cgroup: cgroup && { path: cgroup.path, ...cgroup.stop() } };
+    },
+  };
 }
 
 // Runs beside verify in its own process group and reads the step groups verify
@@ -397,6 +521,7 @@ export async function runVerify(config, { release = false, browser = false } = {
   const eachPeak = Object.entries(peak.each).filter(([, gib]) => gib > 0).sort((a, b) => b[1] - a[1])
     .map(([name, gib]) => `${name} ${gib.toFixed(1)}/${declared.get(name).toFixed(1)}`).join(", ");
   if (eachPeak) console.log(`Step peaks, measured/declared GiB: ${eachPeak}`);
+  if (peak.cgroup?.gib > 0) console.log(`Job cgroup peak ${peak.cgroup.gib.toFixed(1)} GiB (${peak.cgroup.source} of ${peak.cgroup.path}, page cache included)`);
   console.log(`${failed ? "Failed" : "Passed"} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
   // Not process.exit: stdout to a pipe (CI, the pre-push hook) is written
   // asynchronously, and exiting at once would cut off the steps' output.

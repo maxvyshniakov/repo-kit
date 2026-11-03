@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { withDefaults } from "../src/config.mjs";
-import { chain, normalizeSteps, runSteps, sizeSteps, unitTestWorkers, verifyCores, verifyMemory, verifySteps } from "../src/verify.mjs";
+import { cgroupMemory, chain, normalizeSteps, runSteps, sizeSteps, stepProcesses, unitTestWorkers, verifyCores, verifyMemory, verifySteps } from "../src/verify.mjs";
 import { kitRoot, tempRepository } from "./fixtures.mjs";
 
 const names = steps => steps.map(({ name }) => name);
@@ -232,7 +232,66 @@ test("verify leases REPO_KIT_VERIFY_SLOTS when set, as CI's verify.yml sets it, 
   }
 });
 
-function runFakeVerify({ failing = "", bytes = 1 << 20, sleepBuild = false } = {}) {
+test("a step's processes are its group, its descendants in sessions of their own, and its orphans", () => {
+  const KiB = 1024 ** 2; // rss in KiB per GiB
+  const row = (pid, ppid, pgid, gib) => ({ pid, ppid, pgid, rss: gib * KiB });
+  const members = new Map();
+  const roots = new Map([[100, "browser checks"], [500, "lint"]]);
+  const first = stepProcesses([
+    row(50, 1, 50, 0.1), // verify
+    row(100, 50, 100, 0.1), // the step's bun
+    row(101, 100, 100, 0.2), // agent-browser's client
+    row(200, 101, 200, 2), // Chromium, in a session of its own
+    row(201, 200, 200, 1), // a renderer
+    row(400, 1, 100, 0.5), // an orphan still in the step's group
+    row(300, 1, 300, 4), // unrelated
+    row(500, 50, 500, 0.3),
+  ], roots, members);
+  assert.deepEqual([...first.get("browser checks").pids].sort(), [100, 101, 200, 201, 400]);
+  assert.equal(first.get("browser checks").gib.toFixed(1), "3.8");
+  assert.equal(first.get("lint").gib.toFixed(1), "0.3");
+  // The client exits: Chromium is reparented to init and left the group long
+  // ago, but the step started it, so it still counts.
+  const second = stepProcesses([row(100, 50, 100, 0.1), row(200, 1, 200, 2), row(201, 200, 200, 1), row(300, 1, 300, 4)], roots, members);
+  assert.deepEqual([...second.get("browser checks").pids].sort(), [100, 200, 201]);
+  assert.equal(second.get("lint").gib, 0);
+});
+
+test("the job's cgroup memory: memory.peak reset for this run, or memory.current's samples", () => {
+  const GiB = 1024 ** 3;
+  const repository = tempRepository({
+    "proc-cgroup": "0::/ci.slice/runner.service\n",
+    "cgroup/ci.slice/runner.service/memory.current": `${1 * GiB}\n`,
+    "cgroup/ci.slice/runner.service/memory.peak": `${9 * GiB}\n`,
+  });
+  try {
+    const dir = path.join(repository.root, "cgroup/ci.slice/runner.service");
+    const options = { proc: path.join(repository.root, "proc-cgroup"), root: path.join(repository.root, "cgroup") };
+    const reset = cgroupMemory(options);
+    assert.equal(reset.path, "/ci.slice/runner.service");
+    // The kernel answers the reset fd with the peak since the reset.
+    fs.writeFileSync(path.join(dir, "memory.peak"), `${3 * GiB}\n`);
+    reset.sample();
+    assert.deepEqual(reset.stop(), { gib: 3, source: "memory.peak" });
+
+    fs.rmSync(path.join(dir, "memory.peak"));
+    const sampled = cgroupMemory(options);
+    sampled.sample();
+    fs.writeFileSync(path.join(dir, "memory.current"), `${2 * GiB}\n`);
+    sampled.sample();
+    fs.writeFileSync(path.join(dir, "memory.current"), `${1 * GiB}\n`);
+    sampled.sample();
+    assert.deepEqual(sampled.stop(), { gib: 2, source: "memory.current" });
+
+    assert.equal(cgroupMemory({ ...options, proc: path.join(repository.root, "missing") }), undefined, "off Linux");
+    fs.writeFileSync(options.proc, "0::/\n");
+    assert.equal(cgroupMemory(options), undefined, "the root cgroup has no memory files");
+  } finally {
+    repository.cleanup();
+  }
+});
+
+function runFakeVerify({ failing = "", bytes = 1 << 20, sleepBuild = false, detachedBuild = false } = {}) {
   const repository = fakeRepository(`#!/bin/sh
 node -e 'process.stdout.write("x".repeat(${bytes}) + "\\n")'
 [ "$2" = "${failing}" ] && exit 3
@@ -240,6 +299,7 @@ node -e 'process.stdout.write("x".repeat(${bytes}) + "\\n")'
 [ "$2" = "test" ] && echo "workers=$VITEST_MAX_WORKERS/$REPO_KIT_WORKERS"
 [ "$2" = "typecheck" ] && echo "workers=$VITEST_MAX_WORKERS/$REPO_KIT_WORKERS"
 [ "$2" = "build" ] && [ -n "${sleepBuild}" ] && node -e 'const a = Buffer.alloc(64 << 20, 1); setTimeout(() => a.length, 2500)'
+[ "$2" = "build" ] && [ -n "${detachedBuild}" ] && node -e 'require("child_process").spawn(process.execPath, ["-e", "const a = Buffer.alloc(384 << 20, 1); setTimeout(() => a.length, 2500)"], { detached: true, stdio: "ignore" })'
 exit 0
 `);
   try {
@@ -264,6 +324,13 @@ test("verify's summary shows each step's measured peak beside its declared memor
   assert.equal(status, 0);
   assert.match(stdout, /\nPeak RSS [\d.]+ GiB \(.*build [\d.]+.*\), sampled every second\n/);
   assert.match(stdout, /\nStep peaks, measured\/declared GiB: .*build [\d.]+\/0\.1/);
+});
+
+test("a step's peak counts the processes it starts in sessions of their own, as browsers do", () => {
+  const { status, stdout } = runFakeVerify({ bytes: 10, detachedBuild: true });
+  assert.equal(status, 0);
+  const build = Number(stdout.match(/\nStep peaks, measured\/declared GiB: .*build ([\d.]+)\/0\.1/)?.[1]);
+  assert.ok(build >= 0.3, `the detached 384 MiB process was not counted:\n${stdout.slice(-600)}`);
 });
 
 test("a failing step fails verify and stops the steps beside it", () => {
