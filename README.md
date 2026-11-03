@@ -113,6 +113,29 @@ export default {
 The released package is the one directory under `packages/` with a `package.json`, or the root package when there is
 no `packages/`. `release` and `check-changelogs` handle several workspace packages; `publish` expects exactly one.
 
+### Step memory
+
+verify plans its steps by the memory each declares, so declare it: a step left at 0 never waits for room, and on the
+homelab runner (two 5 GiB slots, a 10 GiB cap) steps that all read 0 start together and run it out of memory.
+
+1. Run verify where memory is budgeted (CI, or under a lease on Linux) and read the summary:
+
+   ```text
+   verify: 6 cores, 10.0 GiB, 4 workers for the steps that use them
+   Step peaks, measured/declared GiB: unit tests 3.3/3.0, storybook build 2.1/1.7, packed consumer 2.0/1.3, ...
+   Job cgroup peak 7.4 GiB (memory.peak of /ci.slice/..., page cache included)
+   ```
+
+   A step's peak is its whole process tree, browsers in sessions of their own included.
+2. Set each step's `memory` to its highest measured peak over a few runs, rounded up by about a tenth.
+3. For a `usesCores` step, `memory` is what it holds besides its workers (default 0.25), and verify plans it at
+   `workers × verify.workerMemory + memory`. From a peak `P` at `W` workers (the summary's first line), set
+   `verify.workerMemory` to about `(P − 0.25) / W`. Data Grid: 2.5 GiB at 2 workers gives 1.15.
+4. Check the sum: the steps that run side by side should fit in the run's memory. The job cgroup's peak, which also
+   holds page cache and the runner itself, shows how close the job came to the cap.
+
+Re-measure after a change that adds tests or stories; a peak above its declared figure shows as `3.3/3.0`.
+
 ## Commands
 
 | Command | Does |
