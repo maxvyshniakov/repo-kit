@@ -4,6 +4,8 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+## 0.3.0 - 2026-11-03
+
 ### Breaking
 
 - `release:publish` requires the release gate chosen by `release.gate` in `repo-kit.config.mjs`. The default, `"local"`, requires a passed `repo-kit release-gate` status (`Library checks (local, macOS)`) on the commit it publishes and refuses without one, naming the command to run; it no longer waits for the checks workflow. `release: { gate: "ci" }` restores the old behaviour exactly: publish waits for `publish.checks` on the commit. No consumer needs a config change to adopt the local gate; a repository that keeps CI as its gate adds that one line. Owner decision 2026-11-03: over 33 days the homelab runner's 52 failed attempts held 2 real library defects and delayed about 9 releases. Inside GitHub Actions (Data Grid's automated catalog release) the calling workflow's jobs still gate publication under either gate.
