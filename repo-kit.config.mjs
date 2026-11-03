@@ -9,6 +9,8 @@ const VERSIONED_FILES = [".github/workflows", "README.md"];
 
 export default {
   verify: {
+    // Its steps take seconds; a hung one fails well inside check.yml's 15 minutes.
+    stepTimeout: 5,
     steps: ({ release }) => [
       { name: "changelogs", command: ["run", "check:changelogs", ...(release ? ["--", "--release"] : [])] },
       { name: "kit check", command: ["run", "check"] },

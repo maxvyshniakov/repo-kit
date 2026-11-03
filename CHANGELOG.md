@@ -4,6 +4,10 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+### Added
+
+- A verify step that runs past its timeout fails: `verify.stepTimeout` minutes (default 15; 0: no limit), or the step's own `timeout`. Its whole process tree gets SIGTERM, SIGKILL 5 s later, and verify stops waiting for its output 2 s after that, with `[step] timed out after …s` and `FAIL step (…, timed out)` in the summary. A repo-kit check hung for 15 minutes after its last output until the job limit cancelled it, with nothing naming the step (run 41630008769). A step that was stopped and still runs at its timeout is killed the same way.
+
 ### Fixed
 
 - A step's measured peak counts its whole process tree: its process group, every descendant by parent pid, processes it started that were since reparented, and daemons orphaned before a sample saw them (agent-browser's), which carry the step's `REPO_KIT_STEP` in their environment. Browsers that start sessions of their own (Chromium, agent-browser) used to fall outside the group, so Sid-Kit's browser checks read 0.4 GiB while the runner peaked at 8.85 GB (straylight#656). On Linux the summary also shows the job cgroup's peak: `memory.peak`, reset for the run where the kernel allows (6.12 and later), else the per-second samples of `memory.current`; it includes page cache.

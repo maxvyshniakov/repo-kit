@@ -369,6 +369,67 @@ test("a step's peak counts a daemon it started that was orphaned at once, as age
   assert.ok(build >= 0.3, `the orphaned 384 MiB daemon was not counted:\n${stdout.slice(-600)}`);
 });
 
+test("a step that outlives its timeout is stopped with its whole tree and fails verify", async () => {
+  const pids = path.join(os.tmpdir(), `repo-kit-timeout-${process.pid}-${Date.now()}`);
+  const repository = tempRepository({
+    "package.json": { name: "fake", version: "0.0.0", type: "module" },
+    "repo-kit.config.mjs": `export default { verify: { stepTimeout: 0.5, steps: [
+  { name: "hang", command: ["run", "hang"], timeout: 0.03 },
+  { name: "lint", command: ["run", "lint"] },
+  { name: "after", command: ["run", "after"], needs: ["hang"] },
+] } };
+`,
+    // A daemon in a session of its own that ignores SIGTERM and holds the
+    // step's output open, as a stuck browser might.
+    "daemon.cjs": `process.on("SIGTERM", () => {});\nrequire("fs").appendFileSync(${JSON.stringify(pids)}, process.pid + "\\n");\nsetInterval(() => {}, 1000);\n`,
+  });
+  fs.mkdirSync(path.join(repository.root, "bin"));
+  fs.writeFileSync(path.join(repository.root, "bin/bun"), `#!/bin/sh
+[ "$2" = "hang" ] && node -e 'require("child_process").spawn(process.execPath, ["daemon.cjs"], { detached: true, stdio: ["ignore", "inherit", "inherit"] }).unref()'
+exec sleep 60
+`, { mode: 0o755 });
+  const env = { ...process.env, PATH: `${path.join(repository.root, "bin")}:${process.env.PATH}`, REPO_KIT_VERIFY_CORES: "2", REPO_KIT_VERIFY_MEMORY_GIB: "16", SLOTFATHER_LEASE: "test" };
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const daemons = () => (fs.existsSync(pids) ? fs.readFileSync(pids, "utf8").trim().split("\n").filter(Boolean).map(Number) : []);
+  try {
+    const started = Date.now();
+    const verify = spawn(process.execPath, [cli, "verify"], { cwd: repository.root, env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    verify.stdout.on("data", chunk => { stdout += chunk; });
+    const guard = setTimeout(() => verify.kill("SIGKILL"), 30_000);
+    const status = await new Promise(resolve => verify.on("exit", resolve));
+    clearTimeout(guard);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(status, 1, stdout);
+    assert.ok(Date.now() - started < 20_000, "verify waited for the hung step");
+    assert.equal(daemons().length, 1, "the daemon started");
+    assert.match(stdout, /\[hang\] timed out after [\d.]+s \(timeout: 0\.03 min\); stopping its processes\n/);
+    assert.match(stdout, /=== hang timed out after [\d.]+s; its last 80 lines:/);
+    assert.match(stdout, /  FAIL hang \([\d.]+s, timed out\)\n/);
+    assert.match(stdout, /  stop lint \(/);
+    assert.match(stdout, /  skip after\n/);
+    const deadline = Date.now() + 5000;
+    while (daemons().some(alive) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100));
+    assert.deepEqual(daemons().filter(alive), [], "the step's daemon outlived its timeout");
+  } finally {
+    for (const pid of daemons()) {
+      try { process.kill(pid, "SIGKILL"); } catch {}
+    }
+    repository.cleanup();
+    fs.rmSync(pids, { force: true });
+  }
+});
+
+test("steps time out after verify.stepTimeout minutes, 15 unless set", () => {
+  assert.equal(withDefaults({}).verify.stepTimeout, 15);
+  assert.throws(() => normalizeSteps([{ name: "a", command: [], timeout: -1 }]), /timeout is minutes/);
+  assert.equal(normalizeSteps([{ name: "a", command: [] }], { stepTimeout: 15 })[0].timeout, 15);
+  assert.equal(normalizeSteps([{ name: "a", command: [], timeout: 40 }], { stepTimeout: 15 })[0].timeout, 40);
+  assert.equal(normalizeSteps([{ name: "a", command: [], timeout: 0 }], { stepTimeout: 15 })[0].timeout, 0, "0: no limit");
+  const config = withDefaults({ verify: { stepTimeout: 5, steps: [{ name: "a", command: [] }] } });
+  assert.equal(verifySteps(config)[0].timeout, 5);
+});
+
 test("a failing step fails verify and stops the steps beside it", () => {
   const { status, stdout } = runFakeVerify({ failing: "lint", bytes: 10 });
   assert.equal(status, 1);

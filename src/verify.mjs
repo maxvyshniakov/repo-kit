@@ -11,7 +11,9 @@
 // output streams live, each line prefixed with its step. The first failure
 // stops the rest and shows that step's last lines again; a signal stops every
 // step and waits for them, and a reaper stops them when verify itself is
-// killed outright. A step marked usesCores gets the cores this run may use
+// killed outright. A step that runs past its timeout (verify.stepTimeout
+// minutes, 15 by default, or its own `timeout`) fails, and its whole process
+// tree is stopped. A step marked usesCores gets the cores this run may use
 // (verifyCores), less what the steps beside it keep busy, and no more workers
 // than half the run's memory holds (verifyMemory), as VITEST_MAX_WORKERS and
 // REPO_KIT_WORKERS; a step with `workers` gets that fixed count. The summary
@@ -36,9 +38,10 @@ const USES_CORES_BASE_GIB = 0.25;
  * Each step: { name, command (bun arguments), needs (names of steps that must
  * pass first), memory? (GiB it holds at its peak; 0 when left out), usesCores?
  * (test workers from the run's cores and memory; `memory` is then what it holds
- * besides them), workers? (a fixed worker count) }. `needs` defaults to [].
+ * besides them), workers? (a fixed worker count), timeout? (minutes it may run;
+ * `stepTimeout` when left out, 0 for no limit) }. `needs` defaults to [].
  */
-export function normalizeSteps(steps) {
+export function normalizeSteps(steps, { stepTimeout = 0 } = {}) {
   const seen = new Set();
   return steps.map(step => {
     if (!step?.name || !Array.isArray(step.command)) throw new Error(`verify step needs a name and a command array: ${JSON.stringify(step)}`);
@@ -46,12 +49,13 @@ export function normalizeSteps(steps) {
     if (step.memory !== undefined && !(step.memory >= 0)) throw new Error(`verify step "${step.name}": memory is GiB, a number of 0 or more`);
     if (step.workers !== undefined && !(Number.isInteger(step.workers) && step.workers > 0)) throw new Error(`verify step "${step.name}": workers is a positive integer`);
     if (step.workers && step.usesCores) throw new Error(`verify step "${step.name}": usesCores and workers exclude each other`);
+    if (step.timeout !== undefined && !(step.timeout >= 0)) throw new Error(`verify step "${step.name}": timeout is minutes, a number of 0 (no limit) or more`);
     const needs = step.needs ?? [];
     for (const need of needs) {
       if (!seen.has(need)) throw new Error(`verify step "${step.name}" needs "${need}", which is not an earlier step`);
     }
     seen.add(step.name);
-    return { ...step, needs };
+    return { ...step, needs, timeout: step.timeout ?? stepTimeout };
   });
 }
 
@@ -63,7 +67,7 @@ export function chain(steps) {
 export function verifySteps(config, { release = false, browser = false } = {}) {
   const declared = browser ? config.verify.browser : config.verify.steps;
   if (!declared) throw new Error(`repo-kit.config.mjs declares no verify.${browser ? "browser" : "steps"}`);
-  return normalizeSteps(typeof declared === "function" ? declared({ release }) : declared);
+  return normalizeSteps(typeof declared === "function" ? declared({ release }) : declared, { stepTimeout: config.verify.stepTimeout });
 }
 
 /**
@@ -182,7 +186,7 @@ export async function runSteps(steps, start, { now = Date.now, signal, memory = 
           running.delete(step.name);
           held -= needed;
           const status = passed ? "ok" : handle.stopped ? "stopped" : "fail";
-          results.set(step.name, { name: step.name, status, seconds: (now() - started) / 1000 });
+          results.set(step.name, { name: step.name, status, seconds: (now() - started) / 1000, ...(handle.timedOut ? { timedOut: true } : {}) });
           if (status === "fail" && !halted) halt("SIGTERM");
           launch();
         });
@@ -464,7 +468,24 @@ function lineReader(line) {
   };
 }
 
-function startProcess(step, { root, running, mark }) {
+// After a timeout's SIGTERM, how long a step's processes get before SIGKILL,
+// and how long its output may stay open after that (a process outside its
+// tree can hold it) before verify stops waiting.
+const KILL_GRACE_MS = 5000;
+const CLOSE_GRACE_MS = 2000;
+
+/** Sends `signal` to a step's process group and to every process `processes()` finds in it. */
+function signalStep(pid, processes, signal) {
+  for (const target of [-pid, ...processes()]) {
+    try {
+      process.kill(target, signal);
+    } catch {
+      // already gone
+    }
+  }
+}
+
+function startProcess(step, { root, running, mark, processes = () => [] }) {
   const env = { ...process.env, [STEP_MARK]: mark };
   if (step.workers) env.VITEST_MAX_WORKERS = env.REPO_KIT_WORKERS = String(step.workers);
   // Each step gets its own process group, so stopping it reaches its workers too.
@@ -489,27 +510,46 @@ function startProcess(step, { root, running, mark }) {
     tail,
     stop(signal = "SIGTERM") {
       handle.stopped = true;
-      try {
-        process.kill(-child.pid, signal);
-      } catch {
-        // already gone
-      }
+      signalStep(child.pid, processes, signal);
     },
   };
+  const started = Date.now();
+  const timers = [];
   handle.done = new Promise(resolve => {
     let ended = false;
     const finish = passed => {
       if (ended) return;
       ended = true;
+      for (const timer of timers) clearTimeout(timer);
       for (const reader of readers) reader.flush();
       running.delete(handle);
       resolve(passed);
     };
+    // A step past its timeout fails, and its whole tree is stopped: SIGTERM,
+    // then SIGKILL. Its output may stay open in a process outside the tree, so
+    // verify stops waiting for it a little after that.
+    if (step.timeout > 0) {
+      timers.push(setTimeout(() => {
+        // A step stopped already that still runs is killed the same way.
+        if (!handle.stopped) {
+          handle.timedOut = ((Date.now() - started) / 1000).toFixed(1);
+          write(`timed out after ${handle.timedOut}s (timeout: ${step.timeout} min); stopping its processes`);
+        }
+        signalStep(child.pid, processes, "SIGTERM");
+        timers.push(setTimeout(() => {
+          signalStep(child.pid, processes, "SIGKILL");
+          timers.push(setTimeout(() => {
+            for (const stream of [child.stdout, child.stderr]) stream.destroy();
+            finish(false);
+          }, CLOSE_GRACE_MS));
+        }, KILL_GRACE_MS));
+      }, step.timeout * 60_000));
+    }
     child.on("error", error => {
       write(String(error.stack));
       finish(false);
     });
-    child.on("close", code => finish(code === 0));
+    child.on("close", code => finish(code === 0 && !handle.timedOut));
   });
   running.add(handle);
   return handle;
@@ -546,14 +586,16 @@ export async function runVerify(config, { release = false, browser = false } = {
   console.log(`verify: ${cores} cores${memoryText}${steps.some(step => step.usesCores) ? `, ${workers} workers for the steps that use them` : ""}`);
   const started = Date.now();
   const tails = new Map();
+  const handles = new Map();
   const groups = new Map();
   const marks = new Map(steps.map((step, index) => [`${RUN_MARK}.${index}`, step.name]));
   const memorySamples = sampleMemory(groups, marks);
   const reaper = startReaper();
   const results = await runSteps(steps, step => {
     console.log(`  start ${step.name} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
-    const handle = startProcess(step, { root: config.root, running, mark: `${RUN_MARK}.${steps.indexOf(step)}` });
+    const handle = startProcess(step, { root: config.root, running, mark: `${RUN_MARK}.${steps.indexOf(step)}`, processes: () => memorySamples.processes(step.name) });
     tails.set(step.name, handle.tail);
+    handles.set(step.name, handle);
     if (handle.pid) {
       groups.set(handle.pid, step.name);
       reaper.add(handle.pid);
@@ -566,13 +608,14 @@ export async function runVerify(config, { release = false, browser = false } = {
   }, { signal: interrupt.signal, memory });
   const peak = memorySamples.stop();
   reaper.done();
-  for (const { name } of results.filter(result => result.status === "fail")) {
-    console.log(`\n=== ${name} failed; its last ${FAILURE_TAIL_LINES} lines:`);
+  for (const { name, timedOut } of results.filter(result => result.status === "fail")) {
+    const how = timedOut ? `timed out after ${handles.get(name).timedOut}s` : "failed";
+    console.log(`\n=== ${name} ${how}; its last ${FAILURE_TAIL_LINES} lines:`);
     for (const line of tails.get(name)) console.log(line);
   }
   console.log("\nverify:");
   const symbol = { ok: "ok  ", fail: "FAIL", stopped: "stop" };
-  for (const { name, status, seconds } of results) console.log(`  ${symbol[status]} ${name} (${seconds.toFixed(1)}s)`);
+  for (const { name, status, seconds, timedOut } of results) console.log(`  ${symbol[status]} ${name} (${seconds.toFixed(1)}s${timedOut ? ", timed out" : ""})`);
   for (const { name } of steps.filter(step => !results.some(result => result.name === step.name))) console.log(`  skip ${name}`);
   const failed = results.length < steps.length || results.some(result => result.status !== "ok");
   const shares = Object.entries(peak.steps).filter(([, gib]) => gib > 0).sort((a, b) => b[1] - a[1])

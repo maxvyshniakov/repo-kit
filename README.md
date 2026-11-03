@@ -90,6 +90,7 @@ export default {
     slots: 1,          // default 1
     browserSlots: 2,   // default 2
     workerMemory: 0.9, // GiB one usesCores worker holds; default 0.9
+    stepTimeout: 15,   // minutes a step may run (a step's own `timeout` wins); default 15, 0: no limit
   },
   prePush: { slots: 3 },   // default 1; covers installs and every pushed commit
   publish: {
@@ -116,7 +117,7 @@ no `packages/`. `release` and `check-changelogs` handle several workspace packag
 
 | Command | Does |
 |---|---|
-| `verify [--release] [--browser]` | Runs the config's steps side by side, within the run's memory. Output streams with a step prefix. The first failure stops the rest and prints that step's last 80 lines; a signal stops every step, and a reaper stops them when verify is killed outright. The summary shows the peak RSS and each step's measured peak beside its declared `memory`: the resident memory of the step's whole process tree, browsers in sessions of their own included, and on Linux the job cgroup's peak. |
+| `verify [--release] [--browser]` | Runs the config's steps side by side, within the run's memory. Output streams with a step prefix. The first failure stops the rest and prints that step's last 80 lines; a step past its timeout fails and its whole process tree is stopped; a signal stops every step, and a reaper stops them when verify is killed outright. The summary shows the peak RSS and each step's measured peak beside its declared `memory`: the resident memory of the step's whole process tree, browsers in sessions of their own included, and on Linux the job cgroup's peak. |
 | `pre-push` | Runs from `.githooks/pre-push`. Verifies each pushed commit in a clean temporary worktree (`--release` for `main`), once per commit. Refuses Bun older than 1.4.4. Skip once with `git push --no-verify`. |
 | `hooks install` | `prepare`: points `core.hooksPath` at `.githooks`, unless someone set another path or `CI` is set. |
 | `hooks sync` | Writes the managed hooks into `.githooks`: a `pre-push` shim and `reference-transaction`. Other hooks there are the repository's own. |
