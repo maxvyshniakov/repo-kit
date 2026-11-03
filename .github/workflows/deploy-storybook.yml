@@ -5,7 +5,7 @@
 #     deploy:
 #       needs: [check, browser]
 #       if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-#       uses: maxvyshniakov/repo-kit/.github/workflows/deploy-storybook.yml@v0.1.0
+#       uses: maxvyshniakov/repo-kit/.github/workflows/deploy-storybook.yml@v0.1.1
 #       with:
 #         url: https://sid-kit.maxvyshniakov.com
 #       secrets: inherit
@@ -61,7 +61,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
-      - uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.1.0
+      - uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.1.1
       - run: bun run build
       - run: bun run storybook:build
       - run: bun run storybook:prepare-deploy

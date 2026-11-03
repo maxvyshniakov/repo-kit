@@ -32,12 +32,15 @@ test("a tarball that misses an export target, ships tests or keeps workspace ran
   assert.match(tarballIssues({ manifest, packedManifest: { private: true }, files }).join("\n"), /private and cannot be published/);
 });
 
-test("consumer packages take the first exact pin in the repository's manifests", () => {
+test("consumer packages take the first exact pin in the repository's manifests, else the declared range", () => {
   const pinned = pinnedVersions([
-    { devDependencies: { vite: "^8.0.0", react: "19.2.8" } },
+    { devDependencies: { vite: "^8.0.0", react: "19.2.8", "react-dom": "^19.3.0", self: "workspace:*" } },
     { dependencies: { vite: "8.3.2" } },
   ]);
   assert.equal(pinned("react"), "19.2.8");
-  assert.equal(pinned("vite"), "8.3.2", "a range is not a pin");
-  assert.throws(() => pinned("typescript"), /No exact version of typescript/);
+  assert.equal(pinned("vite"), "8.3.2", "an exact pin wins over an earlier range");
+  // Text Truncate's React peers are ^ ranges in devDependencies, as its own check accepted.
+  assert.equal(pinned("react-dom"), "^19.3.0");
+  assert.throws(() => pinned("self"), /No version of self is declared/);
+  assert.throws(() => pinned("typescript"), /No version of typescript is declared/);
 });

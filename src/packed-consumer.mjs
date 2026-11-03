@@ -69,14 +69,17 @@ export function tarballIssues({ manifest, packedManifest, files }) {
   return issues;
 }
 
-/** A lookup of the exact versions the repository pins, first source first. */
+/**
+ * A lookup of the versions the repository builds and tests against: the first
+ * exact pin in the sources, else the first range a source declares (Text
+ * Truncate declares its React peers as ^ ranges in devDependencies).
+ */
 export function pinnedVersions(manifests) {
   return name => {
-    for (const manifest of manifests) {
-      const version = manifest.dependencies?.[name] ?? manifest.devDependencies?.[name];
-      if (version && /^\d+\.\d+\.\d+/.test(version)) return version;
-    }
-    throw new Error(`No exact version of ${name} is pinned in the repository manifests.`);
+    const declared = manifests.map(manifest => manifest.dependencies?.[name] ?? manifest.devDependencies?.[name]).filter(Boolean);
+    const version = declared.find(candidate => /^\d+\.\d+\.\d+/.test(candidate)) ?? declared.find(candidate => !candidate.startsWith("workspace:"));
+    if (!version) throw new Error(`No version of ${name} is declared in the repository manifests.`);
+    return version;
   };
 }
 

@@ -4,7 +4,7 @@
 #
 #   jobs:
 #     check:
-#       uses: maxvyshniakov/repo-kit/.github/workflows/verify.yml@v0.1.0
+#       uses: maxvyshniakov/repo-kit/.github/workflows/verify.yml@v0.1.1
 #
 # The caller grants contents: read and packages: read.
 name: verify
@@ -33,7 +33,7 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.1.0
+      - uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.1.1
       - run: bun run verify -- $VERIFY_ARGS
         env:
           VERIFY_ARGS: ${{ inputs.args }}

@@ -4,6 +4,12 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+## 0.1.1 - 2026-11-03
+
+### Fixed
+
+- `packed-consumer` installs a peer the repository declares only as a range (Text Truncate's `react: ^19.3.0`), as Inline Measure's and Text Truncate's own checks did; an exact pin still wins.
+
 ## 0.1.0 - 2026-11-03
 
 ### Added
