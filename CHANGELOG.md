@@ -4,6 +4,8 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+## 0.2.2 - 2026-11-03
+
 ### Changed
 
 - Every heavy step of the reusable workflows runs under a slotfather lease of the whole runner by default (`slots: all`): verify (through `REPO_KIT_VERIFY_SLOTS`, which overrides `verify.slots` and `verify.browserSlots`), the build and check of `browser.yml`, the Storybook builds of `deploy-storybook.yml` and the command of `release.yml`. On the homelab runner a 1-slot verify used to run beside browser jobs and other repositories' builds that ran outside any lease, until the runners' memory cap stalled its tests (Sid-Kit 0.41.1, straylight#656). `deploy-storybook.yml` and `release.yml` take `slot-wait` too, and their default time limits rise to 30 minutes to cover the wait.

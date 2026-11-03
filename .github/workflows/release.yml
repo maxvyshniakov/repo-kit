@@ -6,7 +6,7 @@
 #   jobs:
 #     dependency-release:
 #       needs: [check, browser]
-#       uses: maxvyshniakov/repo-kit/.github/workflows/release.yml@v0.2.1
+#       uses: maxvyshniakov/repo-kit/.github/workflows/release.yml@v0.2.2
 #       with:
 #         command: node scripts/publish-catalog-release.mjs
 #         enabled: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
@@ -52,7 +52,7 @@ jobs:
         with:
           fetch-depth: 0
       - if: inputs.enabled
-        uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.2.1
+        uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.2.2
       # Publishing builds the package (prepack): it runs under a lease, like every
       # heavy job here.
       - if: inputs.enabled
