@@ -16,6 +16,7 @@
 //   packedConsumer: {
 //     versionSources: ["package.json", "apps/storybook/package.json"], // where exact versions are pinned
 //     dependencies: ["vite"], devDependencies: ["@types/node"],     // more consumer packages, at their pins
+//     types: false,                                                  // the packages ship no declarations
 //     probes: [async ({ consumerDir, run, ok, fail, writeFile, pinned, packages, args }) => {}],
 //   }
 import { spawnSync } from "node:child_process";
@@ -139,20 +140,29 @@ export async function runPackedConsumer(config, { keep = false, args = [] } = {}
     const names = new Set(packages.map(pkg => pkg.name));
     const peers = [...new Set(packages.flatMap(pkg => Object.keys(pkg.manifest.peerDependencies ?? {})))].filter(name => !names.has(name));
     const at = list => Object.fromEntries(list.map(name => [name, pinned(name)]));
-    const typePackages = ["typescript", ...peers.map(peer => `@types/${peer.replace("@", "").replace("/", "__")}`)].filter(name => {
-      try {
-        pinned(name);
-        return true;
-      } catch {
-        return false;
-      }
-    });
+    // Declarations are checked unless the config says the packages ship none
+    // (types: false); then typescript must be pinned, so a range cannot skip it.
+    const checkTypes = options.types !== false;
+    const typePackages = [
+      ...(checkTypes ? ["typescript"] : []),
+      ...peers.map(peer => `@types/${peer.replace("@", "").replace("/", "__")}`).filter(name => {
+        try {
+          pinned(name);
+          return true;
+        } catch {
+          return false;
+        }
+      }),
+    ];
+    const archives = Object.fromEntries(packages.map(pkg => [pkg.name, `file:${pkg.tarball}`]));
     writeFile(path.join(consumerDir, "package.json"), `${JSON.stringify({
       name: "packed-consumer",
       private: true,
       type: "module",
-      dependencies: { ...Object.fromEntries(packages.map(pkg => [pkg.name, `file:${pkg.tarball}`])), ...at(peers), ...at(options.dependencies ?? []) },
+      dependencies: { ...archives, ...at(peers), ...at(options.dependencies ?? []) },
       devDependencies: at([...typePackages, ...(options.devDependencies ?? [])]),
+      // A package that depends on another released here gets the local archive too.
+      overrides: archives,
     }, null, 2)}\n`);
     // Dependencies on other @maxvyshniakov packages come from the private registry.
     if (fs.existsSync(path.join(root, "bunfig.toml"))) fs.copyFileSync(path.join(root, "bunfig.toml"), path.join(consumerDir, "bunfig.toml"));
@@ -168,7 +178,7 @@ export async function runPackedConsumer(config, { keep = false, args = [] } = {}
       else fail(`import("${specifier}"): ${result.stderr.trim().split("\n").filter(Boolean).at(-1)}`);
     }
 
-    if (typePackages.includes("typescript")) {
+    if (checkTypes) {
       console.log("\nDeclarations");
       writeFile(path.join(consumerDir, "index.ts"), `${specifiers.map((specifier, index) => `import * as entry${index} from ${JSON.stringify(specifier)};`).join("\n")}\nexport const entries = [${specifiers.map((_, index) => `entry${index}`).join(", ")}];\n`);
       writeFile(path.join(consumerDir, "tsconfig.json"), `${JSON.stringify({

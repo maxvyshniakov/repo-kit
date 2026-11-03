@@ -41,10 +41,13 @@ export async function main([command, ...args]) {
       return process.exitCode;
     }
     case "pre-push": {
-      const { leaseSelf } = await import("./heavy.mjs");
-      if (await leaseSelf(config.prePush.slots)) return process.exitCode;
-      const { runPrePush } = await import("./pre-push.mjs");
-      return runPrePush();
+      // Read the pushed refs first: a push with nothing to verify (a tag, a
+      // deletion) takes no slot. The leased run gets them on its stdin.
+      const [{ leaseSelf }, { commitsToVerify, runPrePush }] = await Promise.all([import("./heavy.mjs"), import("./pre-push.mjs")]);
+      const stdin = fs.readFileSync(0, "utf8");
+      if (!commitsToVerify(stdin).length) return 0;
+      if (await leaseSelf(config.prePush.slots, { input: stdin })) return process.exitCode;
+      return runPrePush({ stdin });
     }
     case "hooks": {
       const hooks = await import("./hooks.mjs");

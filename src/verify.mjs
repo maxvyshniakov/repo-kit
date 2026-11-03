@@ -118,6 +118,8 @@ export async function runSteps(steps, start, { now = Date.now, signal } = {}) {
   return [...results.values()];
 }
 
+const REPEAT_SIGNAL_MS = 1000;
+
 // Lines of a failed step's output shown again under the summary.
 const FAILURE_TAIL_LINES = 80;
 
@@ -192,15 +194,21 @@ export async function runVerify(config, { release = false, browser = false } = {
   const steps = verifySteps(config, { release, browser });
   const cores = verifyCores();
   const running = new Set();
-  // A signal stops every running step's process group and waits for them; a second one kills them.
+  // A signal stops every running step's process group and waits for them; a
+  // second one kills them. One Ctrl-C under `bun run verify` arrives twice, from
+  // the terminal's process group and from bun forwarding it, so a repeat within
+  // REPEAT_SIGNAL_MS of the first is the same keypress.
   const interrupt = new AbortController();
+  let interrupted = 0;
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.on(signal, () => {
       if (!interrupt.signal.aborted) {
         console.log(`\nverify: ${signal}, stopping the running steps`);
+        interrupted = Date.now();
         interrupt.abort(signal);
         return;
       }
+      if (Date.now() - interrupted < REPEAT_SIGNAL_MS) return;
       for (const handle of running) handle.stop("SIGKILL");
       process.exit(128 + os.constants.signals[signal]);
     });

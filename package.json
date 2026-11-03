@@ -11,6 +11,8 @@
     ".": "./src/index.mjs",
     "./changelog": "./src/changelog.mjs",
     "./packed-consumer": "./src/packed-consumer.mjs",
+    "./publish": "./src/publish.mjs",
+    "./release": "./src/release.mjs",
     "./package.json": "./package.json"
   },
   "files": [

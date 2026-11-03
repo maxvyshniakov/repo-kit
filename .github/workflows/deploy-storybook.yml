@@ -8,10 +8,12 @@
 #       uses: maxvyshniakov/repo-kit/.github/workflows/deploy-storybook.yml@v0.1.0
 #       with:
 #         url: https://sid-kit.maxvyshniakov.com
-#       secrets:
-#         cloudflare-api-token: ${{ secrets.STORYBOOK_CLOUDFLARE_API_TOKEN }}
+#       secrets: inherit
 #
-# The caller grants contents: read and packages: read.
+# STORYBOOK_CLOUDFLARE_API_TOKEN is a secret of the `storybook` environment, not
+# of the repository. A caller job cannot read environment secrets, so this job,
+# which declares the environment, reads it by name; `secrets: inherit` makes the
+# name available here. The caller grants contents: read and packages: read.
 name: deploy-storybook
 on:
   workflow_call:
@@ -30,8 +32,9 @@ on:
         type: number
         default: 20
     secrets:
-      cloudflare-api-token:
-        required: true
+      STORYBOOK_CLOUDFLARE_API_TOKEN:
+        description: Read from the environment named by `environment`.
+        required: false
 jobs:
   deploy:
     name: Publish private Storybook
@@ -46,6 +49,15 @@ jobs:
     env:
       STORYBOOK_DISABLE_TELEMETRY: "1"
     steps:
+      - name: Require the environment's Cloudflare token
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::STORYBOOK_CLOUDFLARE_API_TOKEN is empty: add it to the $ENVIRONMENT environment and call this workflow with secrets: inherit"
+            exit 1
+          fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.STORYBOOK_CLOUDFLARE_API_TOKEN }}
+          ENVIRONMENT: ${{ inputs.environment }}
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
@@ -57,4 +69,4 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
       - run: bun run storybook:deploy
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.cloudflare-api-token }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.STORYBOOK_CLOUDFLARE_API_TOKEN }}

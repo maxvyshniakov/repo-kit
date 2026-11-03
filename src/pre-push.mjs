@@ -84,6 +84,12 @@ export function runPrePush({ stdin = fs.readFileSync(0, "utf8") } = {}) {
   }
   const gitDir = path.resolve(git("rev-parse", "--git-common-dir"));
   const verified = readVerified(gitDir);
+  // A signal lands while spawnSync waits for a step; the step ends (Ctrl-C
+  // reaches its process group too), the temporary worktree is removed, and the
+  // hook then exits with the signal's code instead of verifying further commits.
+  let stopped;
+  const stop = signal => { stopped = signal; };
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, stop);
 
   for (const { sha, release } of commits) {
     const key = `${sha}${release ? " release" : ""}`;
@@ -103,12 +109,16 @@ export function runPrePush({ stdin = fs.readFileSync(0, "utf8") } = {}) {
         console.log(`pre-push: ${sha.slice(0, 10)} has no verify script; nothing to run`);
         passed = true;
       } else {
-        const run = (file, args) => spawnSync(file, args, { cwd: worktree, stdio: "inherit", env }).status === 0;
+        const run = (file, args) => !stopped && spawnSync(file, args, { cwd: worktree, stdio: "inherit", env }).status === 0 && !stopped;
         passed = run("bun", ["install", "--frozen-lockfile"]) && run(...command);
       }
     } finally {
       spawnSync("git", ["worktree", "remove", "--force", worktree], { env, stdio: "ignore" });
       fs.rmSync(worktree, { recursive: true, force: true });
+    }
+    if (stopped) {
+      console.error(`\npre-push: ${stopped}; nothing was pushed.`);
+      return 128 + os.constants.signals[stopped];
     }
     if (!passed) {
       console.error(`\npre-push: ${label} failed on ${sha.slice(0, 10)}; nothing was pushed.`);

@@ -80,6 +80,18 @@ async function githubUser(token) {
   return response.json();
 }
 
+/**
+ * The commit that introduced the current version into the package's
+ * package.json: the release commit, even when later commits touched the file
+ * (a root package's dependencies or scripts).
+ */
+export function releaseCommitOf(git, pkg) {
+  const commits = git("log", "--reverse", "--format=%H", "-S", `"version": "${pkg.version}"`, "--", path.join(pkg.path, "package.json"));
+  const [first] = commits.split("\n").filter(Boolean);
+  if (!first) throw new Error(`no commit sets "version": "${pkg.version}" in ${path.join(pkg.path, "package.json")}`);
+  return first;
+}
+
 export function githubRepository(remoteUrl) {
   const match = /github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?$/.exec(remoteUrl);
   if (!match) throw new Error(`origin is not a GitHub repository: ${remoteUrl}`);
@@ -146,7 +158,7 @@ export async function runPublish(config, { resume = false } = {}) {
   let action = "publish";
   if (resume) {
     const taggedCommit = tagExists ? git("rev-list", "-n", "1", tag) : undefined;
-    const releaseCommit = git("log", "-1", "--format=%H", "--", path.join(pkg.path, "package.json"));
+    const releaseCommit = releaseCommitOf(git, pkg);
     action = resumePublication({
       published: await registryHasVersion(pkg.name, pkg.version, token),
       tagExists,
@@ -154,19 +166,45 @@ export async function runPublish(config, { resume = false } = {}) {
         && git("merge-base", releaseCommit, taggedCommit) === releaseCommit),
     });
   }
-  if (action === "done") {
-    // A local retry can have a tag whose first push failed.
-    git("push", "origin", tag);
-    console.log(`${pkg.name}@${pkg.version} is already published and tagged.`);
-    return 0;
-  }
   // An annotated tag's tagger is git's committer identity. Resolve it before
   // publishing, so a missing identity leaves nothing half done.
   const tagEnv = tagEnvironment(process.env);
   const tagger = /<([^>]*)>/.exec(execFileSync("git", ["var", "GIT_COMMITTER_IDENT"], { cwd: root, encoding: "utf8", env: tagEnv }))[1];
+  const message = `${pkg.name} ${pkg.version}`;
+  // The package is published by the time the tag is pushed: a declined push
+  // prints the recovery, and the follow-up workflows run only after the tag is out.
+  const pushTag = async () => {
+    try {
+      git("push", "origin", tag);
+    } catch {
+      const user = await githubUser(token).catch(() => null);
+      return fail([
+        `Published ${pkg.name}@${pkg.version}, but pushing ${tag} (tagger ${tagger}) failed.`,
+        "If GitHub declined it for email privacy (GH007), tag it as the account's noreply address:",
+        ...tagPushRecovery(tag, message, user ? noreplyEmail(user) : "<id>+<login>@users.noreply.github.com").map(line => `  ${line}`),
+        ...(config.publish.notify.length ? ["Then request the follow-up workflows: bun run repo-kit notify"] : []),
+      ]);
+    }
+    console.log(`Published ${pkg.name}@${pkg.version} and pushed ${tag}, tagged as ${tagger}.`);
+    // A failed request only warns; each target's own schedule is the fallback.
+    await notifyAll(config.publish.notify, token);
+    return 0;
+  };
+  if (action === "done") {
+    if (git("ls-remote", "--tags", "origin", `refs/tags/${tag}`)) {
+      console.log(`${pkg.name}@${pkg.version} is already published and tagged.`);
+      return 0;
+    }
+    // A local retry can have a tag whose first push failed.
+    return pushTag();
+  }
   // In Actions, a publication inside the checks workflow runs after its check
   // jobs; waiting for that run to finish would never end.
-  if (action === "publish" && !process.env.GITHUB_ACTIONS) {
+  // publish.checks: false is for a repository whose checks cannot run yet (no
+  // runner); its pre-push gate is then the only gate, and publish says so.
+  if (action === "publish" && workflow === false) {
+    console.warn(`publish.checks is false: publishing ${head.slice(0, 7)} without waiting for a checks workflow; the pre-push gate was the only gate.`);
+  } else if (action === "publish" && !process.env.GITHUB_ACTIONS) {
     const checks = await waitForChecks(githubRepository(git("remote", "get-url", "origin")), workflow, head, token);
     if (checks.state !== "passed") {
       return fail([
@@ -184,21 +222,6 @@ export async function runPublish(config, { resume = false } = {}) {
   if (!(await registryHasVersion(pkg.name, pkg.version, token))) {
     return fail([`bun publish exited cleanly, but ${registryUrl(pkg.name)} does not serve ${pkg.version}; not tagging.`]);
   }
-  const message = `${pkg.name} ${pkg.version}`;
   execFileSync("git", ["tag", "--annotate", tag, "--message", message], { cwd: root, env: tagEnv });
-  try {
-    git("push", "origin", tag);
-  } catch {
-    const user = await githubUser(token).catch(() => null);
-    return fail([
-      `Published ${pkg.name}@${pkg.version}, but pushing ${tag} (tagger ${tagger}) failed.`,
-      "If GitHub declined it for email privacy (GH007), tag it as the account's noreply address:",
-      ...tagPushRecovery(tag, message, user ? noreplyEmail(user) : "<id>+<login>@users.noreply.github.com").map(line => `  ${line}`),
-      ...(config.publish.notify.length ? ["Then request the follow-up workflows: bun run repo-kit notify"] : []),
-    ]);
-  }
-  console.log(`Published ${pkg.name}@${pkg.version} and pushed ${tag}, tagged as ${tagger}.`);
-  // A failed request only warns; each target's own schedule is the fallback.
-  await notifyAll(config.publish.notify, token);
-  return 0;
+  return pushTag();
 }

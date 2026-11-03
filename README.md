@@ -81,7 +81,7 @@ export default {
   },
   prePush: { slots: 3 },   // default 1; covers installs and every pushed commit
   publish: {
-    checks: "check.yml",   // the workflow publish waits for on the release commit
+    checks: "check.yml",   // the workflow publish waits for on the release commit; false: none can run yet
     notify: [{ repository: "maxvyshniakov/data-grid", workflow: "update-catalog-dependencies.yml", ref: "main" }],
   },
   changelog: {
@@ -181,15 +181,14 @@ jobs:
     uses: maxvyshniakov/repo-kit/.github/workflows/deploy-storybook.yml@v0.1.0
     with:
       url: https://sid-kit.maxvyshniakov.com
-    secrets:
-      cloudflare-api-token: ${{ secrets.STORYBOOK_CLOUDFLARE_API_TOKEN }}
+    secrets: inherit   # the job reads STORYBOOK_CLOUDFLARE_API_TOKEN from the storybook environment
 ```
 
 | Workflow | Inputs |
 |---|---|
 | `verify.yml` | `args` (`--release`), `runner`, `timeout-minutes` (20) |
 | `browser.yml` | `checks` (JSON list of `{name, run}`), `build`, `playwright` (true), `runner`, `timeout-minutes` (30) |
-| `deploy-storybook.yml` | `url`, `environment` (`storybook`), secret `cloudflare-api-token` |
+| `deploy-storybook.yml` | `url`, `environment` (`storybook`); `STORYBOOK_CLOUDFLARE_API_TOKEN` from that environment, with `secrets: inherit` |
 | `release.yml` | `command` (`bun run release:publish`), `enabled` (true), `runner`, `timeout-minutes` (10); the caller grants `contents: write`, `packages: write` |
 
 Jobs show as `<caller job> / <reusable job>`, for example `check / verify` and `deploy / Publish private Storybook`.

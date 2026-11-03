@@ -133,3 +133,23 @@ test("Bun older than 1.4.4 is refused", () => {
   assert.equal(bunTooOld("1.4.5-canary.1"), undefined);
   assert.match(bunTooOld(undefined), /not on PATH/);
 });
+
+test("repo-kit heavy forwards SIGTERM to its command but not SIGINT, which the command gets from the terminal", async () => {
+  const { spawn } = await import("node:child_process");
+  const repository = tempRepository({});
+  try {
+    const log = path.join(repository.root, "signals");
+    const script = `import { runLeased } from ${JSON.stringify(path.join(kitRoot, "src/heavy.mjs"))};
+process.exitCode = await runLeased(1, ["sh", "-c", ${JSON.stringify(`trap 'echo INT >> ${log}' INT; trap 'echo TERM >> ${log}; exit 143' TERM; echo ready; while :; do sleep 0.1; done`)}], { env: { ...process.env, SLOTFATHER_LEASE: "outer" } });`;
+    const parent = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "inherit"] });
+    await new Promise(resolve => parent.stdout.once("data", resolve));
+    const exited = new Promise(resolve => parent.on("close", code => resolve(code)));
+    parent.kill("SIGINT");
+    await new Promise(resolve => setTimeout(resolve, 300));
+    parent.kill("SIGTERM");
+    assert.equal(await exited, 143);
+    assert.equal(fs.readFileSync(log, "utf8"), "TERM\n");
+  } finally {
+    repository.cleanup();
+  }
+});

@@ -63,19 +63,20 @@ export async function runRelease(config, args) {
     return { pkg, manifestPath, manifestText, version, changelogPath, changelog };
   });
 
+  // bun.lock records workspace versions; set them before writing anything, so
+  // a missing entry leaves no half-cut release.
   const lockfilePath = path.join(root, "bun.lock");
-  let lockfile = fs.existsSync(lockfilePath) ? fs.readFileSync(lockfilePath, "utf8") : undefined;
-  let lockfileChanged = false;
+  const hasLockfile = fs.existsSync(lockfilePath);
+  let lockfile = hasLockfile ? fs.readFileSync(lockfilePath, "utf8") : undefined;
+  for (const { pkg, version } of planned) {
+    if (pkg.workspace && hasLockfile) lockfile = setLockfileWorkspaceVersion(lockfile, pkg.path, version);
+  }
   for (const { pkg, manifestPath, manifestText, version, changelogPath, changelog } of planned) {
     fs.writeFileSync(changelogPath, changelog);
     fs.writeFileSync(manifestPath, manifestText.replace(`"version": "${pkg.version}"`, `"version": "${version}"`));
-    if (pkg.workspace && lockfile !== undefined) {
-      lockfile = setLockfileWorkspaceVersion(lockfile, pkg.path, version);
-      lockfileChanged = true;
-    }
     console.log(`${pkg.name} ${pkg.version} -> ${version} (${date})`);
   }
-  if (lockfileChanged) fs.writeFileSync(lockfilePath, lockfile);
+  if (hasLockfile) fs.writeFileSync(lockfilePath, lockfile);
   // The quick start names each archive by version.
   const quickStartPath = config.changelog.quickStart && path.join(root, config.changelog.quickStart);
   if (quickStartPath && fs.existsSync(quickStartPath)) {
@@ -87,6 +88,7 @@ export async function runRelease(config, args) {
     fs.writeFileSync(quickStartPath, quickStart);
   }
   await config.release.afterCut?.({ root, released: planned.map(({ pkg, version }) => ({ ...pkg, previous: pkg.version, version })) });
-  if (lockfileChanged) execFileSync("bun", ["install", "--frozen-lockfile"], { cwd: root, stdio: "inherit" });
+  // The lockfile must still match the manifests after the cut.
+  if (hasLockfile) execFileSync("bun", ["install", "--frozen-lockfile"], { cwd: root, stdio: "inherit" });
   return 0;
 }

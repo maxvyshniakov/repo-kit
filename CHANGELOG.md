@@ -14,10 +14,11 @@ Versions and release rules: [README.md](README.md#versioning).
 - `repo-kit check`: managed hooks, `maxvyshniakov/repo-kit` workflow references and `packageManager` match the installed kit.
 - `repo-kit check-changelogs`, `release` and `publish` for a root package or a workspace under `packages/`. Union of the four repositories' copies:
   - publication by SHA from any branch, worktree or detached HEAD at `origin/main`;
-  - waits for the checks workflow;
+  - waits for the checks workflow (`publish.checks: false` skips the wait, with a warning, while no runner can run the checks);
   - runs the TLS gate itself;
   - handles GH007 tag pushes;
   - `--resume` for a partial publication;
   - `publish.notify` workflow requests.
 - `repo-kit heavy`, `tls` and `packed-consumer`: the slotfather wrapper, the Bun TLS gate and the packed-consumer check, with probes declared by the repository.
+- Subpath exports `./changelog`, `./release`, `./publish` and `./packed-consumer` for repository scripts such as Data Grid's catalog update.
 - Reusable workflows `verify.yml`, `browser.yml`, `deploy-storybook.yml` and `release.yml`, and the composite action `actions/setup-bun`: Bun 1.4.4, the TLS gate, then `bun install`.

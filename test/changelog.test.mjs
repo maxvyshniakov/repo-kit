@@ -204,3 +204,17 @@ for (const [kind, files, changelogPath, manifestPath] of [
     }
   });
 }
+
+test("a workspace missing from bun.lock fails the release before any file is written", async () => {
+  const repository = tempRepository(workspaceFiles({ "bun.lock": "{\n  \"workspaces\": {}\n}\n" }));
+  try {
+    const config = withDefaults({});
+    config.root = repository.root;
+    const before = fs.readFileSync(path.join(repository.root, "packages/example/CHANGELOG.md"), "utf8");
+    await assert.rejects(quiet(() => runRelease(config, ["example:minor"])), /no workspace entry for packages\/example/);
+    assert.equal(fs.readFileSync(path.join(repository.root, "packages/example/CHANGELOG.md"), "utf8"), before);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(repository.root, "packages/example/package.json"), "utf8")).version, "0.2.0");
+  } finally {
+    repository.cleanup();
+  }
+});

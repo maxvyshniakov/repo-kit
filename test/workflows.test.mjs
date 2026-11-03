@@ -82,3 +82,13 @@ console.log(JSON.stringify(shapes));`;
   for (const file of reusable) assert.deepEqual(shapes[file].on, ["workflow_call"], file);
   assert.deepEqual(shapes["check.yml"].on, ["push", "pull_request", "workflow_dispatch"]);
 });
+
+test("the Storybook deploy reads the Cloudflare token from its environment, by name", () => {
+  // The token is a secret of the storybook environment; a caller job cannot read it.
+  const text = read(path.join(workflowsDir, "deploy-storybook.yml"));
+  assert.match(text, /\n {4}environment:\n {6}name: \$\{\{ inputs\.environment \}\}/);
+  assert.match(text, /STORYBOOK_CLOUDFLARE_API_TOKEN:\n {8}description: .*\n {8}required: false/);
+  assert.equal(text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.STORYBOOK_CLOUDFLARE_API_TOKEN \}\}/g)?.length, 2);
+  assert.ok(text.indexOf("Require the environment's Cloudflare token") < text.indexOf("bun run storybook:deploy"));
+  assert.match(read(path.join(kitRoot, "README.md")), /deploy-storybook\.yml@v[\d.]+\n(?: {4}.*\n)*? {4}secrets: inherit/);
+});

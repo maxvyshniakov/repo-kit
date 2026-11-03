@@ -214,3 +214,36 @@ exec sleep 30
     fs.rmSync(pids, { force: true });
   }
 });
+
+test("one Ctrl-C delivered twice, as under bun run, still lets every step stop on its own", async () => {
+  const marks = path.join(os.tmpdir(), `repo-kit-marks-${process.pid}-${Date.now()}`);
+  const repository = fakeRepository(`#!/bin/sh
+trap 'sleep 0.3; echo "$2" >> "${marks}"; exit 130' INT TERM
+echo "started $2"
+while :; do sleep 0.1; done
+`);
+  try {
+    const verify = spawn(process.execPath, [cli, "verify"], { cwd: repository.root, env: repository.env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    const exited = new Promise(resolve => verify.on("close", code => resolve(code)));
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`no live output:\n${stdout}`)), 10_000);
+      verify.stdout.on("data", chunk => {
+        stdout += chunk;
+        if (stdout.includes("[lint] started lint") && stdout.includes("[build] started build")) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+    });
+    verify.kill("SIGINT");
+    await new Promise(resolve => setTimeout(resolve, 50));
+    verify.kill("SIGINT");
+    assert.equal(await exited, 128 + os.constants.signals.SIGINT);
+    assert.match(stdout, /\nFailed in [\d.]+s\n$/, "the summary printed");
+    assert.match(fs.readFileSync(marks, "utf8"), /lint/, "the step's own handler ran, so it was not SIGKILLed");
+  } finally {
+    repository.cleanup();
+    fs.rmSync(marks, { force: true });
+  }
+});

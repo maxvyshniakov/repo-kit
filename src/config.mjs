@@ -10,6 +10,7 @@
 //     packedConsumer: { ... },
 //   };
 import fs from "node:fs";
+import nodeModule from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -26,7 +27,27 @@ export function findRoot(start = process.cwd()) {
   }
 }
 
+// repo-kit.config.mjs may import "@maxvyshniakov/repo-kit". The pre-push shim
+// can run this copy from the main checkout for a linked worktree that has no
+// node_modules, where Node would not find the package from the config's
+// directory; resolve the package to this copy, as a self-reference.
+const kitPackage = new URL("../package.json", import.meta.url).href;
+let resolvingSelf = false;
+function resolveSelf() {
+  if (resolvingSelf || !nodeModule.registerHooks) return;
+  resolvingSelf = true;
+  nodeModule.registerHooks({
+    resolve(specifier, context, nextResolve) {
+      if (specifier === "@maxvyshniakov/repo-kit" || specifier.startsWith("@maxvyshniakov/repo-kit/")) {
+        return nextResolve(specifier, { ...context, parentURL: kitPackage });
+      }
+      return nextResolve(specifier, context);
+    },
+  });
+}
+
 export async function loadConfig(root = findRoot()) {
+  resolveSelf();
   const module = await import(pathToFileURL(path.join(root, CONFIG_FILE)).href);
   return { root, ...withDefaults(module.default ?? {}) };
 }

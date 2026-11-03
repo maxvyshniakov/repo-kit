@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -13,6 +13,7 @@ import {
   publishArguments,
   publishBlockers,
   registryUrl,
+  releaseCommitOf,
   resumePublication,
   tagEnvironment,
   tagPushRecovery,
@@ -120,9 +121,35 @@ test("publish runs the TLS gate before the token reaches any request, and notifi
   const source = readFileSync(new URL("../src/publish.mjs", import.meta.url), "utf8");
   const gate = source.indexOf("runTlsGate()");
   assert.ok(gate > 0 && gate < source.indexOf("resolveToken()"), "the gate runs before the token is read");
-  const tagPush = source.indexOf('git("push", "origin", tag);\n  } catch');
-  const notifyCall = source.indexOf("await notifyAll(config.publish.notify, token)");
+  const pushTag = source.slice(source.indexOf("const pushTag = async () => {"), source.indexOf("  if (action === \"done\") {"));
+  const tagPush = pushTag.indexOf('git("push", "origin", tag);');
+  const notifyCall = pushTag.indexOf("await notifyAll(config.publish.notify, token)");
   assert.ok(tagPush > 0 && notifyCall > tagPush, "notifications follow the tag push");
+  assert.match(pushTag, /tagPushRecovery/, "a declined push prints the GH007 recovery");
+  // --resume's "done" path and a fresh publication push the tag the same way.
+  assert.equal(source.match(/return pushTag\(\);/g)?.length, 2);
+});
+
+test("--resume finds the release commit even after later commits touched package.json", () => {
+  const repository = mkdtempSync(path.join(tmpdir(), "repo-kit-release-commit-"));
+  try {
+    const run = (...args) => execFileSync("git", args, { cwd: repository, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "a", GIT_AUTHOR_EMAIL: "a@b", GIT_COMMITTER_NAME: "a", GIT_COMMITTER_EMAIL: "a@b" } }).trim();
+    const manifest = (version, extra = {}) => writeFileSync(path.join(repository, "package.json"), `${JSON.stringify({ name: "x", version, ...extra }, null, 2)}\n`);
+    run("init", "--quiet");
+    manifest("0.1.0");
+    run("add", "-A");
+    run("commit", "--quiet", "-m", "0.1.0");
+    manifest("0.2.0");
+    run("commit", "--quiet", "-am", "release 0.2.0");
+    const release = run("rev-parse", "HEAD");
+    manifest("0.2.0", { dependencies: { a: "1.0.0" } });
+    run("commit", "--quiet", "-am", "add a dependency");
+    const git = (...args) => run(...args);
+    assert.equal(releaseCommitOf(git, { path: ".", version: "0.2.0" }), release);
+    assert.throws(() => releaseCommitOf(git, { path: ".", version: "0.3.0" }), /no commit sets "version": "0.3.0"/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
 });
 
 const dataGrid = { repository: "maxvyshniakov/data-grid", workflow: "update-catalog-dependencies.yml", ref: "main" };

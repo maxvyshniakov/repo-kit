@@ -16,28 +16,43 @@ export function leasedCommand(slots, command, { env = process.env, cwd = process
   return ["slotfather", "run", "-n", String(slots), "--label", path.basename(cwd), "--", ...command];
 }
 
-/** Runs `command` (argv) under a lease, forwarding signals; resolves to its exit code. */
-export function runLeased(slots, command, { env = process.env, cwd = process.cwd() } = {}) {
+/**
+ * Runs `command` (argv) under a lease; resolves to its exit code. `input`, when
+ * given, is written to its stdin. SIGTERM and SIGHUP are forwarded. SIGINT is
+ * not: Ctrl-C reaches the child from the terminal's process group already, and
+ * forwarding it too would deliver it twice. The listener keeps this process
+ * alive until the child has handled it.
+ */
+export function runLeased(slots, command, { env = process.env, cwd = process.cwd(), input } = {}) {
   const [file, ...args] = leasedCommand(slots, command, { env, cwd });
-  const child = spawn(file, args, { cwd, env, stdio: "inherit" });
+  const child = spawn(file, args, { cwd, env, stdio: [input === undefined ? "inherit" : "pipe", "inherit", "inherit"] });
+  if (input !== undefined) child.stdin.end(input);
   const forward = signal => child.kill(signal);
-  const signals = ["SIGINT", "SIGTERM", "SIGHUP"];
-  for (const signal of signals) process.on(signal, forward);
+  const ignore = () => {};
+  process.on("SIGTERM", forward);
+  process.on("SIGHUP", forward);
+  process.on("SIGINT", ignore);
   return new Promise(resolve => {
     child.on("error", error => {
       console.error(`${file}: ${error.message}`);
       resolve(127);
     });
     child.on("close", (code, signal) => {
-      for (const name of signals) process.off(name, forward);
+      process.off("SIGTERM", forward);
+      process.off("SIGHUP", forward);
+      process.off("SIGINT", ignore);
       resolve(code ?? 128 + os.constants.signals[signal]);
     });
   });
 }
 
-/** Re-runs this process under a lease unless it already holds one; resolves to false when it did not. */
-export async function leaseSelf(slots, env = process.env) {
+/**
+ * Re-runs this process under a lease unless it already holds one or there is
+ * no slotfather; resolves to whether it did (process.exitCode then holds the
+ * leased run's code).
+ */
+export async function leaseSelf(slots, { env = process.env, input } = {}) {
   if (env.SLOTFATHER_LEASE || !hasSlotfather(env)) return false;
-  process.exitCode = await runLeased(slots, [process.execPath, ...process.argv.slice(1)], { env });
+  process.exitCode = await runLeased(slots, [process.execPath, ...process.argv.slice(1)], { env, input });
   return true;
 }

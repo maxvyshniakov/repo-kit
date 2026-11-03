@@ -67,7 +67,8 @@ function pushFixture({ slotfather = true, lease = "", exit = "0", release = fals
       ? { name: "@maxvyshniakov/example", version: "0.1.0", scripts: {} }
       : { name: "@maxvyshniakov/example", version: "0.1.0", scripts: { verify: "repo-kit verify" } },
     ...(historical ? { "scripts/verify.mjs": "" } : {}),
-    "repo-kit.config.mjs": "export default { prePush: { slots: 3 } };\n",
+    // As the README's config does; a linked worktree must resolve it too.
+    "repo-kit.config.mjs": 'import { chain } from "@maxvyshniakov/repo-kit";\nexport default { prePush: { slots: 3 }, verify: { steps: chain([]) } };\n',
   });
   const { root } = repository;
   const log = path.join(root, ".probe.log");
@@ -214,12 +215,23 @@ test("a linked worktree without node_modules uses the main checkout's repo-kit",
   try {
     fixture.git("worktree", "add", "--quiet", "--detach", worktree);
     const result = spawnSync("sh", [path.join(worktree, ".githooks/pre-push"), "origin", "unused"], {
-      cwd: worktree, encoding: "utf8", input: "",
+      cwd: worktree, encoding: "utf8", input: `refs/tags/v1 ${fixture.head} refs/tags/v1 ${sha("0")}\n`,
       env: { ...fixture.env, PATH: `${path.join(fixture.root, ".bin")}:/usr/bin:/bin`, SLOTFATHER_LEASE: "x" },
     });
     assert.equal(result.status, 0, result.stderr);
   } finally {
     fixture.git("worktree", "remove", "--force", worktree);
+    fixture.cleanup();
+  }
+});
+
+test("a tag-only push verifies nothing and takes no slot", () => {
+  const fixture = pushFixture({ token: "t" });
+  try {
+    const { result, lines } = fixture.run(`refs/tags/v1 ${fixture.head} refs/tags/v1 ${sha("0")}\n`);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(lines, []);
+  } finally {
     fixture.cleanup();
   }
 });
