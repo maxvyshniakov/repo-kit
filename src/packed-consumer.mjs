@@ -70,6 +70,16 @@ export function tarballIssues({ manifest, packedManifest, files }) {
 }
 
 /**
+ * The peers a consumer installs beside the archives: every peer the manifests
+ * declare except optional ones (repo-kit's Playwright, which only `repo-kit
+ * shoot` loads, from the repository).
+ */
+export function requiredPeers(manifests) {
+  return [...new Set(manifests.flatMap(({ peerDependencies = {}, peerDependenciesMeta = {} }) =>
+    Object.keys(peerDependencies).filter(name => !peerDependenciesMeta[name]?.optional)))];
+}
+
+/**
  * A lookup of the versions the repository builds and tests against: the first
  * exact pin in the sources, else the first range a source declares (Text
  * Truncate declares its React peers as ^ ranges in devDependencies).
@@ -141,7 +151,7 @@ export async function runPackedConsumer(config, { keep = false, args = [] } = {}
 
     console.log(`\nInstalling a consumer in ${consumerDir}`);
     const names = new Set(packages.map(pkg => pkg.name));
-    const peers = [...new Set(packages.flatMap(pkg => Object.keys(pkg.manifest.peerDependencies ?? {})))].filter(name => !names.has(name));
+    const peers = requiredPeers(packages.map(pkg => pkg.manifest)).filter(name => !names.has(name));
     const at = list => Object.fromEntries(list.map(name => [name, pinned(name)]));
     // Declarations are checked unless the config says the packages ship none
     // (types: false); then typescript must be pinned, so a range cannot skip it.

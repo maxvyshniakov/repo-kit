@@ -7,6 +7,9 @@ const USAGE = `Usage: repo-kit <command>
   verify [--release] [--browser]   the repository's gate (repo-kit.config.mjs verify)
   pre-push                         the pre-push hook: verify each pushed commit in a clean worktree
   heavy <slots|all> <command...>   run a command under a slotfather lease, when slotfather is installed
+  shoot <story id filter...> [<storybook url>|--url=] [--theme=light,dark] [--width=1280,375]
+        [--browser=chromium,firefox,webkit,safari] [--out=<dir>] [--viewport]
+                                   screenshot Storybook stories, under a lease of shoot.slots
   checks                           run REPO_KIT_CHECKS' list of {name, run} in order, as browser.yml does
   hooks <install|sync|check|status>
   check                            managed hooks, workflow references and packageManager match the kit
@@ -48,6 +51,13 @@ export async function main([command, ...args]) {
       const { runVerify } = await import("./verify.mjs");
       await runVerify(config, { release: args.includes("--release"), browser });
       return process.exitCode;
+    }
+    case "shoot": {
+      const [{ leaseSelf }, { parseShootArgs, runShoot }] = await Promise.all([import("./heavy.mjs"), import("./shoot.mjs")]);
+      // Bad arguments fail before the lease, not after a wait for it.
+      parseShootArgs(args, { root: config.root, shoot: config.shoot });
+      if (await leaseSelf(config.shoot.slots)) return process.exitCode;
+      return runShoot(config, args);
     }
     case "pre-push": {
       // Read the pushed refs first: a push with nothing left to verify (a tag,

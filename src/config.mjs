@@ -8,6 +8,7 @@
 //     changelog: { quickStart: "docs/GETTING_STARTED.md", peerScope: "@maxvyshniakov/" },
 //     release: { gate: "local", afterCut({ root, packages }) {} },
 //     packedConsumer: { ... },
+//     shoot: { url: "http://127.0.0.1:6010", storybookDir: "apps/storybook", slots: 1 },
 //   };
 import fs from "node:fs";
 import nodeModule from "node:module";
@@ -62,6 +63,9 @@ export function withDefaults(config) {
     // gate: "local" (repo-kit release-gate's attestation) or "ci" (the checks workflow); README.md#release-gate.
     release: { gate: "local", ...config.release },
     packedConsumer: { ...config.packedConsumer },
+    // repo-kit shoot: the Storybook it reads by default, the Storybook app whose
+    // story files a failed index names, and the slots it leases.
+    shoot: { url: "http://127.0.0.1:6010", storybookDir: "apps/storybook", slots: 1, ...config.shoot },
   };
 }
 

@@ -10,6 +10,7 @@ Data Grid, Inline Measure, Text Truncate):
 - the slotfather wrapper;
 - the Bun TLS gate;
 - the packed-consumer check;
+- story screenshots in Chromium, Firefox, WebKit and Safari;
 - reusable GitHub Actions workflows.
 
 It replaces the copies of `scripts/verify.mjs`, `pre-push.mjs`, `publish.mjs`, `release.mjs`,
@@ -49,7 +50,8 @@ The command names stay as they were, so instructions and skills that name them k
     "check:consumer": "repo-kit packed-consumer",
     "release": "repo-kit release",
     "release:publish": "repo-kit publish",
-    "security:tls": "repo-kit tls"
+    "security:tls": "repo-kit tls",
+    "shoot:stories": "repo-kit shoot"
   }
 }
 ```
@@ -158,7 +160,65 @@ Re-measure after a change that adds tests or stories; a peak above its declared 
 | `notify` | Requests `publish.notify`'s workflows again. |
 | `heavy <slots\|all> <command...>` | Runs a command under `slotfather run -n <slots>` when slotfather is on PATH and no lease is held; otherwise directly. |
 | `tls` | The TLS gate (below). |
-| `packed-consumer [--keep]` | Packs, installs into a temporary consumer, imports every entrypoint in plain Node, type-checks under `nodenext` without `skipLibCheck`, then runs the probes. |
+| `packed-consumer [--keep]` | Packs, installs into a temporary consumer, imports every entrypoint in plain Node, type-checks under `nodenext` without `skipLibCheck`, then runs the probes. Optional peers are not installed. |
+| `shoot <story id filter...> [<url>\|--url=] [--theme=] [--width=] [--browser=] [--out=] [--viewport]` | [Story screenshots](#story-screenshots) from a running Storybook, under a lease of `shoot.slots`. |
+
+## Story screenshots
+
+```sh
+bun run shoot:stories -- button--default
+bun run shoot:stories -- field --theme=light,dark --width=1280,375 --out=/tmp/shots
+bun run shoot:stories -- showcase --browser=chromium,firefox,webkit,safari
+bun run shoot:stories -- http://127.0.0.1:6020 badge --viewport     # no full page
+```
+
+`repo-kit shoot` screenshots every story whose id contains one of the filters, in each theme (the `theme` global),
+width (900 px high) and browser, and prints each file: `<out>/<story-id>-<theme>-<width>.png`, with `-<browser>`
+appended for every browser but Chromium. The defaults are `--theme=light --width=1280 --browser=chromium`, full-page
+pictures, and `--out` `<tmpdir>/<repository folder>-shots`. A full page taller than 16384 px is cut to its top 16384 px
+with a warning: Firefox refuses a picture over 65535 px, and Chromium writes one nothing opens (Data Grid's showcase
+is 390104 px tall).
+
+The Storybook is the first bare `http(s)` argument or `--url=`, else `SID_KIT_STORYBOOK_URL`, `STORYBOOK_URL`, then
+`shoot.url` (default `http://127.0.0.1:6010`, `bun run storybook`). It also works against a static build served by
+the repository's own server.
+
+Before each picture it waits, in order, for Storybook's rendered mark (`sb-show-main` on `body`, or the error
+display), a 1.2 s settle for mounted content, then every image in the viewport `complete` with a `naturalWidth`
+(up to 15 s, then a warning), each `decode()`d. Safari paints lazy, async-decoded images late, and a wait over an
+empty list of images passes before the content mounts, so the settle comes first. A dev server keeps a failed story
+index until the broken file changes again: shoot touches the file the error names (under `shoot.storybookDir`, default
+`apps/storybook`) and retries, and reloads a story that shows the Vite error overlay.
+
+| `--browser=` | Engine |
+|---|---|
+| `chromium` | Playwright's Chromium, the `chromium` channel (not the headless shell). |
+| `firefox` | The installed `/Applications/Firefox.app` over WebDriver BiDi (Playwright's `moz-firefox` channel). Playwright's own patched Firefox does not start on macOS 27 ("Could not find profile folder"), and it is not the Firefox users run. |
+| `webkit` | Playwright's WebKit. It renders like Safari but has none of Safari's scrolling or settings: static layout only. |
+| `safari` | Safari Technology Preview over its own `safaridriver`. Viewport pictures only (WebDriver), `fullPage` is ignored. |
+
+Playwright stays the repository's own pinned devDependency: repo-kit declares it as an optional peer and loads it from
+the repository root, and `safari` needs none. `firefox` needs Firefox installed.
+
+Safari itself refuses WebDriver while the owner has it open, so `safari` drives Safari Technology Preview, which runs
+beside it. One-time setup by the owner: `brew install --cask safari-technology-preview` (the installer asks for an
+administrator password), then in its own Settings, Advanced → "Show features for web developers" and Developer →
+"Allow remote automation". safaridriver brings the window to the front; shoot hands focus straight back to the app
+that had it, and the window keeps drawing behind the owner's apps. Do not hide or minimise it: WebKit then marks the
+page hidden, stops drawing frames and cannot screenshot. A run that ended without closing its session (killed, or its
+safaridriver gone) leaves Safari Technology Preview "already paired with another WebDriver session"; when no other
+safaridriver of it runs, shoot quits that automation window (`--automation`, never the owner's own) and starts again,
+and when one runs, it fails naming that driver. Engine details: the mastack `browser-verify` skill.
+
+```js
+// repo-kit.config.mjs; every field is optional
+export default {
+  shoot: { url: "http://127.0.0.1:6010", storybookDir: "apps/storybook", slots: 1 },
+};
+```
+
+The module is exported as `@maxvyshniakov/repo-kit/shoot` (`parseShootArgs`, `launchBrowser`, `shootStories`) for a
+check that needs the same engines.
 
 ## Release gate
 

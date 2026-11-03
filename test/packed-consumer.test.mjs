@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { entrySpecifiers, exportTargets, pinnedVersions, runtimeTarget, tarballIssues } from "../src/packed-consumer.mjs";
+import { entrySpecifiers, exportTargets, pinnedVersions, requiredPeers, runtimeTarget, tarballIssues } from "../src/packed-consumer.mjs";
 
 const manifest = {
   name: "@maxvyshniakov/example",
@@ -43,4 +43,12 @@ test("consumer packages take the first exact pin in the repository's manifests, 
   assert.equal(pinned("react-dom"), "^19.3.0");
   assert.throws(() => pinned("self"), /No version of self is declared/);
   assert.throws(() => pinned("typescript"), /No version of typescript is declared/);
+});
+
+test("the consumer installs every peer but the optional ones", () => {
+  assert.deepEqual(requiredPeers([
+    { peerDependencies: { react: "^19.0.0", "react-dom": "^19.0.0" } },
+    { peerDependencies: { react: "^19.0.0", playwright: ">=1.50.0" }, peerDependenciesMeta: { playwright: { optional: true } } },
+    {},
+  ]), ["react", "react-dom"]);
 });
