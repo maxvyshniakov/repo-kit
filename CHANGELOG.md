@@ -4,6 +4,8 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+## 0.3.1 - 2026-11-04
+
 ### Added
 
 - `repo-kit shoot` (`"shoot:stories": "repo-kit shoot"`) screenshots Storybook stories by story id filter, in each `--theme`, `--width` and `--browser=chromium,firefox,webkit,safari`, full page or `--viewport`, into `--out`, from a Storybook given as a bare URL or `--url=`. `firefox` is the installed Firefox (Playwright's `moz-firefox` channel; Playwright's own Firefox does not start on macOS 27), `safari` is Safari Technology Preview over its safaridriver, with focus handed back to the app that had it and its automation window quit after the run that started it. Before each picture it waits for `sb-show-main`, a settle, then the viewport's images loaded and decoded. A full page over 16384 px is cut to its top 16384 px with a warning (Firefox refuses one over 65535 px; Data Grid's showcase is 390104 px tall). A Safari Technology Preview left paired by a run that died is restarted when no other safaridriver holds it. It leases `shoot.slots` (default 1) as `repo-kit heavy` does, and loads the repository's own Playwright, now an optional peer. It replaces Sid-Kit's and Data Grid's `scripts/shoot-stories.mjs`, `scripts/lib/browsers.mjs` and `scripts/lib/safari.mjs`, which had drifted: Sid-Kit's had no Safari and no image waits.

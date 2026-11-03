@@ -6,7 +6,7 @@
 #
 #   jobs:
 #     browser:
-#       uses: maxvyshniakov/repo-kit/.github/workflows/browser.yml@v0.3.0
+#       uses: maxvyshniakov/repo-kit/.github/workflows/browser.yml@v0.3.1
 #       with:
 #         checks: >-
 #           [{"name": "stories", "run": "bun run check:stories -- --no-build"}]
@@ -55,7 +55,7 @@ jobs:
       REPO_KIT_SLOT_WAIT: ${{ inputs.slot-wait }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.3.0
+      - uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.3.1
       # The homelab runner has Chromium's system libraries and keeps downloaded
       # browsers per Playwright version.
       - if: inputs.playwright
