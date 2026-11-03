@@ -4,6 +4,8 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+## 0.1.2 - 2026-11-03
+
 ### Changed
 
 - `verify.yml` runs `verify --release` only for `main` and for pull requests into `main`, as the pre-push hook does; on `dev`, other branches and manual runs there it runs without `--release`, so `## Unreleased` entries no longer fail it. `args` no longer defaults to `--release`; callers that set `--release` themselves can drop it.
