@@ -6,7 +6,7 @@
 #   jobs:
 #     dependency-release:
 #       needs: [check, browser]
-#       uses: maxvyshniakov/repo-kit/.github/workflows/release.yml@v0.1.2
+#       uses: maxvyshniakov/repo-kit/.github/workflows/release.yml@v0.2.0
 #       with:
 #         command: node scripts/publish-catalog-release.mjs
 #         enabled: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
@@ -43,7 +43,7 @@ jobs:
         with:
           fetch-depth: 0
       - if: inputs.enabled
-        uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.1.2
+        uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.2.0
       - if: inputs.enabled
         run: eval "$COMMAND"
         env:
