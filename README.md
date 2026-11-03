@@ -172,10 +172,10 @@ export default {
 };
 ```
 
-Gate `local` is the default, chosen on 2026-11-03: over 33 days the homelab runner's 52 failed attempts were 24
-infrastructure, 19 flaky and 7 CI-only plumbing failures, none of them a defect the local gate would miss, and two
-real library defects. Both were Sid-Kit ScrollArea defects that broke only under Chromium's software compositing on
-Linux, which a GPU-rendered Mac run did not catch. The local gate runs its browser checks in software compositing for
+Gate `local` is the default, chosen on 2026-11-03: over 33 days and five repositories the homelab runner's 52 failed
+attempts were 24 infrastructure, 19 flaky and 7 CI-only plumbing failures and 2 real library defects, and CI delayed
+about 9 releases. Both defects were Sid-Kit ScrollArea defects (edge fades, a rounded clip) that broke only under
+Chromium's software compositing on Linux, which a GPU-rendered Mac run did not catch. The local gate runs its browser checks in software compositing for
 that reason. Switch to `ci` when a second contributor joins, or whenever releases must not depend on one machine.
 
 ### Gate `local`
