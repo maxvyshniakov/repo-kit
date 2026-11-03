@@ -2,7 +2,7 @@
 // where the repository root is and which package it publishes.
 //
 //   export default {
-//     verify: { steps: ({ release }) => [...], browser: () => [...], slots: 1, browserSlots: 2 },
+//     verify: { steps: ({ release }) => [...], browser: () => [...], slots: 1, browserSlots: 2, workerMemory: 0.9 },
 //     prePush: { slots: 3 },
 //     publish: { checks: "check.yml", notify: [{ repository, workflow, ref }] },
 //     changelog: { quickStart: "docs/GETTING_STARTED.md", peerScope: "@maxvyshniakov/" },
@@ -55,7 +55,7 @@ export async function loadConfig(root = findRoot()) {
 export function withDefaults(config) {
   return {
     ...config,
-    verify: { slots: 1, browserSlots: 2, ...config.verify },
+    verify: { slots: 1, browserSlots: 2, workerMemory: 0.9, ...config.verify },
     prePush: { slots: 1, ...config.prePush },
     publish: { checks: "check.yml", notify: [], ...config.publish },
     changelog: { quickStart: "docs/GETTING_STARTED.md", peerScope: "@maxvyshniakov/", ...config.changelog },

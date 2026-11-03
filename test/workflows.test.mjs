@@ -49,6 +49,17 @@ test("repo-kit's own checks use the action from their own commit and decide --re
   assert.match(text, /workflow_dispatch:/);
 });
 
+test("browser.yml builds and checks under one lease, and both gates can give up waiting for it", () => {
+  const browser = read(path.join(workflowsDir, "browser.yml"));
+  assert.match(browser, /- run: node_modules\/\.bin\/repo-kit heavy "\$SLOTS" sh -c 'eval "\$BUILD" && eval "\$CHECK"'\n/);
+  assert.doesNotMatch(browser, /- run: eval "\$BUILD"\n/, "the build must not run outside the lease");
+  for (const file of ["verify.yml", "browser.yml"]) {
+    const text = read(path.join(workflowsDir, file));
+    assert.match(text, /\n      slot-wait:\n/, file);
+    assert.match(text, /REPO_KIT_SLOT_WAIT: \$\{\{ inputs\.slot-wait \}\}\n/, file);
+  }
+});
+
 test("third-party actions are pinned by commit SHA", () => {
   const files = [...fs.readdirSync(workflowsDir).map(file => path.join(workflowsDir, file)), path.join(kitRoot, "actions/setup-bun/action.yml")];
   for (const file of files) {

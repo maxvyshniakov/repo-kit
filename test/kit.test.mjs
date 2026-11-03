@@ -118,6 +118,9 @@ test("a heavy command leases once, and runs directly without slotfather", () => 
   assert.deepEqual(leasedCommand(2, ["bun", "run", "x"], { env: {}, cwd: "/repo/sid-kit", slotfather: true }), ["slotfather", "run", "-n", "2", "--label", "sid-kit", "--", "bun", "run", "x"]);
   assert.deepEqual(leasedCommand(2, ["bun"], { env: { SLOTFATHER_LEASE: "outer" }, cwd: "/repo", slotfather: true }), ["bun"]);
   assert.deepEqual(leasedCommand("all", ["bun"], { env: {}, cwd: "/repo", slotfather: false }), ["bun"]);
+  assert.deepEqual(leasedCommand(2, ["bun"], { env: { REPO_KIT_SLOT_WAIT: "2400" }, cwd: "/repo/sid-kit", slotfather: true }), ["slotfather", "run", "-n", "2", "--label", "sid-kit", "--wait", "2400", "--", "bun"], "a lease that gives up after REPO_KIT_SLOT_WAIT");
+  assert.deepEqual(leasedCommand(2, ["bun"], { env: { SID_KIT_SLOT_WAIT: "60" }, cwd: "/repo", slotfather: true }).slice(6, 8), ["--wait", "60"], "the older name still works");
+  assert.deepEqual(leasedCommand(2, ["bun"], { env: { REPO_KIT_SLOT_WAIT: "0" }, cwd: "/repo", slotfather: true }).includes("--wait"), false);
 });
 
 test("GITHUB_TOKEN wins over gh auth token, which fills in when it is unset", () => {

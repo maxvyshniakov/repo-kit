@@ -6,27 +6,42 @@
 //   repo-kit verify --release       the same with release: true (main: no unreleased entries)
 //   repo-kit verify --browser       verify.browser, the slower browser checks
 //
-// A step starts as soon as the steps it needs have passed, so independent steps
-// run side by side. Their output streams live, each line prefixed with its
-// step. The first failure stops the rest and shows that step's last lines
-// again; a signal stops every step and waits for them. A step marked usesCores
-// gets the cores this run may use (verifyCores), less what the steps beside it
-// keep busy, as VITEST_MAX_WORKERS and REPO_KIT_WORKERS.
-import { execFileSync, spawn } from "node:child_process";
+// A step starts as soon as the steps it needs have passed and its memory fits
+// beside the running steps, so independent steps run side by side. Their
+// output streams live, each line prefixed with its step. The first failure
+// stops the rest and shows that step's last lines again; a signal stops every
+// step and waits for them, and a reaper stops them when verify itself is
+// killed outright. A step marked usesCores gets the cores this run may use
+// (verifyCores), less what the steps beside it keep busy, and no more workers
+// than half the run's memory holds (verifyMemory), as VITEST_MAX_WORKERS and
+// REPO_KIT_WORKERS; a step with `workers` gets that fixed count. The summary
+// shows each step's measured peak memory beside the figure it declares.
+import { execFile, execFileSync, spawn } from "node:child_process";
 import os from "node:os";
 
 // Cores the steps beside a usesCores step keep busy while it runs.
 const RESERVED_CORES = 2;
+const GiB = 1024 ** 3;
+// What one test worker holds at its peak, by default (verify.workerMemory):
+// Data Grid's Vitest workers, VM contexts up to vmMemoryLimit plus the worker.
+export const WORKER_MEMORY_GIB = 0.9;
+// What a usesCores step holds besides its workers, by default (its `memory`).
+const USES_CORES_BASE_GIB = 0.25;
 
 /**
  * Each step: { name, command (bun arguments), needs (names of steps that must
- * pass first), usesCores? }. `needs` defaults to [].
+ * pass first), memory? (GiB it holds at its peak; 0 when left out), usesCores?
+ * (test workers from the run's cores and memory; `memory` is then what it holds
+ * besides them), workers? (a fixed worker count) }. `needs` defaults to [].
  */
 export function normalizeSteps(steps) {
   const seen = new Set();
   return steps.map(step => {
     if (!step?.name || !Array.isArray(step.command)) throw new Error(`verify step needs a name and a command array: ${JSON.stringify(step)}`);
     if (seen.has(step.name)) throw new Error(`duplicate verify step "${step.name}"`);
+    if (step.memory !== undefined && !(step.memory >= 0)) throw new Error(`verify step "${step.name}": memory is GiB, a number of 0 or more`);
+    if (step.workers !== undefined && !(Number.isInteger(step.workers) && step.workers > 0)) throw new Error(`verify step "${step.name}": workers is a positive integer`);
+    if (step.workers && step.usesCores) throw new Error(`verify step "${step.name}": usesCores and workers exclude each other`);
     const needs = step.needs ?? [];
     for (const need of needs) {
       if (!seen.has(need)) throw new Error(`verify step "${step.name}" needs "${need}", which is not an earlier step`);
@@ -50,44 +65,99 @@ export function verifySteps(config, { release = false, browser = false } = {}) {
 /**
  * The cores this run may use: REPO_KIT_VERIFY_CORES (or the older
  * SID_KIT_VERIFY_CORES) when set; under a slotfather lease its share of the
- * machine (SLOTFATHER_COUNT of `slotfather slots`); otherwise, as on CI, every core.
+ * machine (SLOTFATHER_COUNT of slotfather's total slots); otherwise, as on CI
+ * without slotfather, every core.
  */
-export function verifyCores(env = process.env, { cpus = os.availableParallelism(), totalSlots = readTotalSlots } = {}) {
+export function verifyCores(env = process.env, { cpus = os.availableParallelism(), capacity = readCapacity } = {}) {
   const override = Number.parseInt(env.REPO_KIT_VERIFY_CORES ?? env.SID_KIT_VERIFY_CORES ?? "", 10);
   if (override > 0) return override;
-  const leased = Number.parseInt(env.SLOTFATHER_COUNT ?? "", 10);
-  if (env.SLOTFATHER_LEASE && leased > 0) {
-    const total = totalSlots();
+  const leased = leasedSlots(env);
+  if (leased) {
+    const { total } = capacity();
     if (total > 0) return Math.max(1, Math.min(cpus, Math.floor((leased * cpus) / total)));
   }
   return cpus;
 }
 
-function readTotalSlots() {
-  try {
-    const output = execFileSync("slotfather", ["slots"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-    return Number(output.match(/^(\d+) slots?\b/)?.[1] ?? 0);
-  } catch {
-    return 0;
-  }
+function leasedSlots(env) {
+  const count = Number.parseInt(env.SLOTFATHER_COUNT ?? "", 10);
+  return env.SLOTFATHER_LEASE && count > 0 ? count : 0;
 }
 
-/** Workers for a usesCores step: the run's cores less those the steps beside it keep busy. */
-export function unitTestWorkers(cores) {
-  return Math.max(1, cores - RESERVED_CORES);
+let capacityCache;
+/** slotfather's capacity (`slotfather advise`: total slots, gib_per_slot), or {} without slotfather. */
+function readCapacity() {
+  if (!capacityCache) {
+    try {
+      capacityCache = JSON.parse(execFileSync("slotfather", ["advise"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+    } catch {
+      capacityCache = {};
+    }
+  }
+  return capacityCache;
 }
 
 /**
- * Runs each step once the steps it needs have passed, every ready step at once.
- * `start(step)` returns { done: Promise<boolean>, stop(signal), stopped }. After
- * the first failure, or once `signal` aborts (its reason is the signal name to
- * forward), nothing new starts and the running steps are stopped. Resolves, once
- * every started step has ended, to { name, status: "ok" | "fail" | "stopped",
- * seconds } per started step.
+ * The memory this run may use, in GiB: REPO_KIT_VERIFY_MEMORY_GIB when set.
+ * Under a slotfather lease, the leased slots times the memory slotfather gives
+ * a slot (the homelab runner: 5 GiB), or no figure where slotfather budgets
+ * cores only (this Mac); without a lease, what Linux reports available, or all
+ * memory elsewhere (macOS counts its cache as used). Always no more than the
+ * job's cgroup limit (process.constrainedMemory) and, on Linux, MemAvailable.
+ * Infinity: no figure, cores decide.
  */
-export async function runSteps(steps, start, { now = Date.now, signal } = {}) {
+export function verifyMemory(env = process.env, {
+  platform = process.platform, free = os.freemem(), total = os.totalmem(),
+  constrained = process.constrainedMemory?.(), capacity = readCapacity,
+} = {}) {
+  const override = Number.parseFloat(env.REPO_KIT_VERIFY_MEMORY_GIB ?? "");
+  if (override > 0) return override;
+  const limits = [];
+  if (constrained > 0 && constrained < total) limits.push(constrained / GiB);
+  if (platform === "linux") limits.push(free / GiB);
+  const leased = leasedSlots(env);
+  if (leased) {
+    // A request above the total holds every slot.
+    const { gib_per_slot: perSlot, total: slots } = capacity();
+    if (perSlot > 0) limits.push(Math.min(leased, slots > 0 ? slots : leased) * perSlot);
+  } else if (platform !== "linux") {
+    limits.push(total / GiB);
+  }
+  return limits.length ? Math.min(...limits) : Infinity;
+}
+
+/**
+ * Workers for a usesCores step: the run's cores less those the steps beside it
+ * keep busy, and no more than half the run's memory (GiB) holds at
+ * `workerMemory` GiB each, so the other steps keep room beside it. Several jobs
+ * share CI's runner, so a core count alone can run it out of memory.
+ */
+export function unitTestWorkers(cores, memory = Infinity, workerMemory = WORKER_MEMORY_GIB) {
+  const byMemory = Math.floor(memory / 2 / workerMemory);
+  return Math.max(1, Math.min(cores - RESERVED_CORES, byMemory));
+}
+
+/** Each step's worker count and the memory it is planned with: a usesCores step's follows its workers. */
+export function sizeSteps(steps, { workers, workerMemory = WORKER_MEMORY_GIB }) {
+  return steps.map(step => {
+    if (step.usesCores) return { ...step, workers, memory: workers * workerMemory + (step.memory ?? USES_CORES_BASE_GIB) };
+    return { ...step, memory: step.memory ?? 0 };
+  });
+}
+
+/**
+ * Runs each step once the steps it needs have passed and its `memory` fits in
+ * the run's `memory` beside the running steps, every such step at once; one
+ * that never fits runs alone. `start(step)` returns { done: Promise<boolean>,
+ * stop(signal), stopped }. After the first failure, or once `signal` aborts (its
+ * reason is the signal name to forward), nothing new starts and the running
+ * steps are stopped. Resolves, once every started step has ended, to { name,
+ * status: "ok" | "fail" | "stopped", seconds } per started step.
+ */
+export async function runSteps(steps, start, { now = Date.now, signal, memory = Infinity } = {}) {
   const results = new Map();
   const running = new Map();
+  let held = 0;
   let halted = false;
   const halt = reason => {
     halted = true;
@@ -98,11 +168,15 @@ export async function runSteps(steps, start, { now = Date.now, signal } = {}) {
       for (const step of halted ? [] : steps) {
         if (results.has(step.name) || running.has(step.name)) continue;
         if (!step.needs.every(need => results.get(need)?.status === "ok")) continue;
+        const needed = step.memory ?? 0;
+        if (running.size && held + needed > memory) continue;
+        held += needed;
         const started = now();
         const handle = start(step);
         running.set(step.name, handle);
         handle.done.then(passed => {
           running.delete(step.name);
+          held -= needed;
           const status = passed ? "ok" : handle.stopped ? "stopped" : "fail";
           results.set(step.name, { name: step.name, status, seconds: (now() - started) / 1000 });
           if (status === "fail" && !halted) halt("SIGTERM");
@@ -116,6 +190,73 @@ export async function runSteps(steps, start, { now = Date.now, signal } = {}) {
     launch();
   });
   return [...results.values()];
+}
+
+/**
+ * Samples the resident memory of every running step's process group once a
+ * second; `stop()` returns the highest total (GiB), each step's share of it,
+ * and each step's own peak (`each`), the figure its `memory` declares.
+ */
+function sampleMemory(groups) {
+  let peak = { total: 0, steps: {} };
+  const each = {};
+  const sample = () => execFile("ps", ["-A", "-o", "pgid=,rss="], (error, output) => {
+    if (error) return;
+    const byGroup = new Map();
+    for (const line of output.split("\n")) {
+      const [pgid, rss] = line.trim().split(/\s+/).map(Number);
+      if (pgid && rss) byGroup.set(pgid, (byGroup.get(pgid) ?? 0) + (rss * 1024) / GiB);
+    }
+    const steps = {};
+    for (const [pgid, name] of groups) {
+      steps[name] = byGroup.get(pgid) ?? 0;
+      each[name] = Math.max(each[name] ?? 0, steps[name]);
+    }
+    const total = Object.values(steps).reduce((sum, gib) => sum + gib, 0);
+    if (total > peak.total) peak = { total, steps };
+  });
+  const timer = setInterval(sample, 1000);
+  timer.unref();
+  return { stop: () => (clearInterval(timer), { ...peak, each }) };
+}
+
+// Runs beside verify in its own process group and reads the step groups verify
+// starts ("+pgid") and ends ("-pgid") from its stdin. When that pipe closes
+// before "done", verify itself died, SIGKILL included, which no handler sees:
+// the reaper stops every step group still listed, SIGKILL after 5 s.
+const REAPER = `
+const groups = new Set();
+let done = false;
+let pending = "";
+const signal = (name) => { for (const group of groups) { try { process.kill(-group, name); } catch {} } };
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  const lines = (pending + chunk).split("\\n");
+  pending = lines.pop();
+  for (const line of lines) {
+    if (line === "done") done = true;
+    else if (line[0] === "+") groups.add(Number(line.slice(1)));
+    else if (line[0] === "-") groups.delete(Number(line.slice(1)));
+  }
+});
+process.stdin.on("end", () => {
+  if (done || !groups.size) return;
+  signal("SIGTERM");
+  setTimeout(() => signal("SIGKILL"), 5000);
+});
+`;
+
+/** Starts the reaper; `add`/`remove` report step groups, `done` releases it. */
+export function startReaper() {
+  const reaper = spawn(process.execPath, ["-e", REAPER], { stdio: ["pipe", "ignore", "ignore"], detached: true });
+  reaper.unref();
+  reaper.stdin.on("error", () => {});
+  reaper.stdin.unref?.();
+  return {
+    add: pgid => reaper.stdin.write(`+${pgid}\n`),
+    remove: pgid => reaper.stdin.write(`-${pgid}\n`),
+    done: () => reaper.stdin.end("done\n"),
+  };
 }
 
 const REPEAT_SIGNAL_MS = 1000;
@@ -139,9 +280,9 @@ function lineReader(line) {
   };
 }
 
-function startProcess(step, { root, cores, running }) {
+function startProcess(step, { root, running }) {
   const env = { ...process.env };
-  if (step.usesCores) env.VITEST_MAX_WORKERS = env.REPO_KIT_WORKERS = String(unitTestWorkers(cores));
+  if (step.workers) env.VITEST_MAX_WORKERS = env.REPO_KIT_WORKERS = String(step.workers);
   // Each step gets its own process group, so stopping it reaches its workers too.
   const child = spawn("bun", step.command, { cwd: root, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
   // Output streams live, each line prefixed with its step, so a step that hangs is visible.
@@ -159,6 +300,7 @@ function startProcess(step, { root, cores, running }) {
   });
   const handle = {
     step,
+    pid: child.pid,
     stopped: false,
     tail,
     stop(signal = "SIGTERM") {
@@ -191,8 +333,11 @@ function startProcess(step, { root, cores, running }) {
 
 /** Runs the gate in `root`; sets process.exitCode rather than exiting, so piped output drains. */
 export async function runVerify(config, { release = false, browser = false } = {}) {
-  const steps = verifySteps(config, { release, browser });
   const cores = verifyCores();
+  const memory = verifyMemory();
+  const { workerMemory } = config.verify;
+  const workers = unitTestWorkers(cores, memory, workerMemory);
+  const steps = sizeSteps(verifySteps(config, { release, browser }), { workers, workerMemory });
   const running = new Set();
   // A signal stops every running step's process group and waits for them; a
   // second one kills them. One Ctrl-C under `bun run verify` arrives twice, from
@@ -213,15 +358,29 @@ export async function runVerify(config, { release = false, browser = false } = {
       process.exit(128 + os.constants.signals[signal]);
     });
   }
-  console.log(`verify: ${cores} cores${steps.some(step => step.usesCores) ? `, ${unitTestWorkers(cores)} workers for the steps that use them` : ""}`);
+  const memoryText = Number.isFinite(memory) ? `, ${memory.toFixed(1)} GiB` : "";
+  console.log(`verify: ${cores} cores${memoryText}${steps.some(step => step.usesCores) ? `, ${workers} workers for the steps that use them` : ""}`);
   const started = Date.now();
   const tails = new Map();
+  const groups = new Map();
+  const memorySamples = sampleMemory(groups);
+  const reaper = startReaper();
   const results = await runSteps(steps, step => {
     console.log(`  start ${step.name} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
-    const handle = startProcess(step, { root: config.root, cores, running });
+    const handle = startProcess(step, { root: config.root, running });
     tails.set(step.name, handle.tail);
+    if (handle.pid) {
+      groups.set(handle.pid, step.name);
+      reaper.add(handle.pid);
+      handle.done.then(() => {
+        groups.delete(handle.pid);
+        reaper.remove(handle.pid);
+      });
+    }
     return handle;
-  }, { signal: interrupt.signal });
+  }, { signal: interrupt.signal, memory });
+  const peak = memorySamples.stop();
+  reaper.done();
   for (const { name } of results.filter(result => result.status === "fail")) {
     console.log(`\n=== ${name} failed; its last ${FAILURE_TAIL_LINES} lines:`);
     for (const line of tails.get(name)) console.log(line);
@@ -231,6 +390,13 @@ export async function runVerify(config, { release = false, browser = false } = {
   for (const { name, status, seconds } of results) console.log(`  ${symbol[status]} ${name} (${seconds.toFixed(1)}s)`);
   for (const { name } of steps.filter(step => !results.some(result => result.name === step.name))) console.log(`  skip ${name}`);
   const failed = results.length < steps.length || results.some(result => result.status !== "ok");
+  const shares = Object.entries(peak.steps).filter(([, gib]) => gib > 0).sort((a, b) => b[1] - a[1])
+    .map(([name, gib]) => `${name} ${gib.toFixed(1)}`).join(", ");
+  if (peak.total > 0) console.log(`Peak RSS ${peak.total.toFixed(1)} GiB${shares ? ` (${shares})` : ""}, sampled every second`);
+  const declared = new Map(steps.map(step => [step.name, step.memory]));
+  const eachPeak = Object.entries(peak.each).filter(([, gib]) => gib > 0).sort((a, b) => b[1] - a[1])
+    .map(([name, gib]) => `${name} ${gib.toFixed(1)}/${declared.get(name).toFixed(1)}`).join(", ");
+  if (eachPeak) console.log(`Step peaks, measured/declared GiB: ${eachPeak}`);
   console.log(`${failed ? "Failed" : "Passed"} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
   // Not process.exit: stdout to a pipe (CI, the pre-push hook) is written
   // asynchronously, and exiting at once would cut off the steps' output.

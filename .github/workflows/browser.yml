@@ -28,6 +28,14 @@ on:
         description: runs-on, as JSON.
         type: string
         default: '["self-hosted", "homelab"]'
+      slots:
+        description: slotfather slots the build and the check lease together, where the runner has slotfather.
+        type: number
+        default: 2
+      slot-wait:
+        description: Seconds to wait for that lease before failing with that reason; 0 waits as long as the job runs.
+        type: number
+        default: 0
       timeout-minutes:
         type: number
         default: 30
@@ -43,6 +51,7 @@ jobs:
     env:
       STORYBOOK_DISABLE_TELEMETRY: "1"
       GITHUB_TOKEN: ${{ github.token }}
+      REPO_KIT_SLOT_WAIT: ${{ inputs.slot-wait }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.1.2
@@ -50,9 +59,11 @@ jobs:
       # browsers per Playwright version.
       - if: inputs.playwright
         run: bunx playwright install --no-shell chromium
-      - run: eval "$BUILD"
+      # The build and the check run under one lease, so the build queues with the
+      # runner's other jobs too; a check that leases again (repo-kit heavy) runs
+      # inside it.
+      - run: node_modules/.bin/repo-kit heavy "$SLOTS" sh -c 'eval "$BUILD" && eval "$CHECK"'
         env:
+          SLOTS: ${{ inputs.slots }}
           BUILD: ${{ inputs.build }}
-      - run: eval "$CHECK"
-        env:
           CHECK: ${{ matrix.check.run }}

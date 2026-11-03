@@ -2,6 +2,9 @@
 // runs under `slotfather run -n <slots>`; without it, as on CI runners, it runs
 // directly. A command already under a lease (SLOTFATHER_LEASE set by an outer
 // slotfather run) runs without a second one, so nested commands lease once.
+// REPO_KIT_SLOT_WAIT=<seconds> (or the older SID_KIT_SLOT_WAIT) gives up
+// waiting for the lease after that long: slotfather exits 75, so a CI job fails
+// with that reason instead of being cancelled at its time limit while queued.
 import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -10,10 +13,20 @@ export function hasSlotfather(env = process.env) {
   return spawnSync("sh", ["-c", "command -v slotfather"], { env, stdio: "ignore" }).status === 0;
 }
 
+// slotfather's exit status when --wait ran out before a lease was granted.
+export const WAIT_EXPIRED = 75;
+
+/** Seconds to wait for a lease before giving up, or 0: wait as long as it takes. */
+export function slotWait(env = process.env) {
+  const seconds = Number.parseInt(env.REPO_KIT_SLOT_WAIT ?? env.SID_KIT_SLOT_WAIT ?? "", 10);
+  return seconds > 0 ? seconds : 0;
+}
+
 /** The argv that runs `command` under a lease, or `command` itself when no lease applies. */
 export function leasedCommand(slots, command, { env = process.env, cwd = process.cwd(), slotfather = hasSlotfather(env) } = {}) {
   if (env.SLOTFATHER_LEASE || !slotfather) return command;
-  return ["slotfather", "run", "-n", String(slots), "--label", path.basename(cwd), "--", ...command];
+  const wait = slotWait(env);
+  return ["slotfather", "run", "-n", String(slots), "--label", path.basename(cwd), ...(wait ? ["--wait", String(wait)] : []), "--", ...command];
 }
 
 /**
@@ -24,7 +37,9 @@ export function leasedCommand(slots, command, { env = process.env, cwd = process
  * alive until the child has handled it.
  */
 export function runLeased(slots, command, { env = process.env, cwd = process.cwd(), input } = {}) {
-  const [file, ...args] = leasedCommand(slots, command, { env, cwd });
+  const argv = leasedCommand(slots, command, { env, cwd });
+  const [file, ...args] = argv;
+  const leased = argv !== command;
   const child = spawn(file, args, { cwd, env, stdio: [input === undefined ? "inherit" : "pipe", "inherit", "inherit"] });
   if (input !== undefined) child.stdin.end(input);
   const forward = signal => child.kill(signal);
@@ -41,6 +56,9 @@ export function runLeased(slots, command, { env = process.env, cwd = process.cwd
       process.off("SIGTERM", forward);
       process.off("SIGHUP", forward);
       process.off("SIGINT", ignore);
+      if (leased && code === WAIT_EXPIRED && slotWait(env)) {
+        console.error(`repo-kit: gave up waiting for ${slots} slot(s) after ${slotWait(env)}s (slotfather status shows the queue)`);
+      }
       resolve(code ?? 128 + os.constants.signals[signal]);
     });
   });

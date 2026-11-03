@@ -55,6 +55,13 @@ The command names stay as they were, so instructions and skills that name them k
 
 `repo-kit verify` and `repo-kit pre-push` take their own slotfather lease (`verify.slots`, `verify.browserSlots`,
 `prePush.slots`). Other heavy scripts wrap themselves: `"check:stories": "repo-kit heavy 2 bun scripts/run-story-checks.mjs"`.
+`REPO_KIT_SLOT_WAIT=<seconds>` makes every lease give up after that long (slotfather exits 75), so a CI job fails with
+that reason instead of reaching its time limit while queued.
+
+The memory a run may use is the leased slots times slotfather's `gib_per_slot` (the homelab runner: 5 GiB a slot), capped
+by the job's cgroup limit and Linux's MemAvailable; without a lease, MemAvailable on Linux and all memory elsewhere.
+On this Mac slotfather budgets cores only, so cores decide. `REPO_KIT_VERIFY_MEMORY_GIB` and `REPO_KIT_VERIFY_CORES`
+override the figures.
 
 ## repo-kit.config.mjs
 
@@ -65,19 +72,24 @@ import { chain } from "@maxvyshniakov/repo-kit";
 
 export default {
   verify: {
-    // bun arguments; a step starts once every step in `needs` has passed.
+    // bun arguments; a step starts once every step in `needs` has passed and its
+    // memory (GiB at its peak, as the summary measures it) fits beside the running steps.
     steps: ({ release }) => [
-      { name: "changelogs", command: ["run", "check:changelogs", ...(release ? ["--", "--release"] : [])] },
-      { name: "kit", command: ["run", "check:kit"] },
-      { name: "lint", command: ["run", "lint"] },
-      { name: "unit tests", command: ["run", "test"], usesCores: true }, // VITEST_MAX_WORKERS
-      { name: "build", command: ["run", "build"] },
-      { name: "packed consumer", command: ["run", "check:consumer"], needs: ["build"] },
-      { name: "typecheck", command: ["run", "typecheck"], needs: ["build"] },
+      { name: "changelogs", command: ["run", "check:changelogs", ...(release ? ["--", "--release"] : [])], memory: 0.1 },
+      { name: "kit", command: ["run", "check:kit"], memory: 0.1 },
+      { name: "lint", command: ["run", "lint"], memory: 0.3 },
+      // VITEST_MAX_WORKERS and REPO_KIT_WORKERS from the run's cores and memory;
+      // memory here is what it holds besides its workers (default 0.25).
+      { name: "unit tests", command: ["run", "test"], usesCores: true },
+      { name: "build", command: ["run", "build"], memory: 0.4 },
+      { name: "storybook tests", command: ["run", "test:storybook"], needs: ["build"], workers: 2, memory: 1.1 },
+      { name: "packed consumer", command: ["run", "check:consumer"], needs: ["build"], memory: 1.3 },
+      { name: "typecheck", command: ["run", "typecheck"], needs: ["build"], memory: 0.7 },
     ],
     browser: chain([["build", ["run", "build"]], ["stories", ["run", "check:stories"]]]),
     slots: 1,          // default 1
     browserSlots: 2,   // default 2
+    workerMemory: 0.9, // GiB one usesCores worker holds; default 0.9
   },
   prePush: { slots: 3 },   // default 1; covers installs and every pushed commit
   publish: {
@@ -104,7 +116,7 @@ no `packages/`. `release` and `check-changelogs` handle several workspace packag
 
 | Command | Does |
 |---|---|
-| `verify [--release] [--browser]` | Runs the config's steps side by side. Output streams with a step prefix. The first failure stops the rest and prints that step's last 80 lines; a signal stops every step. |
+| `verify [--release] [--browser]` | Runs the config's steps side by side, within the run's memory. Output streams with a step prefix. The first failure stops the rest and prints that step's last 80 lines; a signal stops every step, and a reaper stops them when verify is killed outright. The summary shows the peak RSS and each step's measured peak beside its declared `memory`. |
 | `pre-push` | Runs from `.githooks/pre-push`. Verifies each pushed commit in a clean temporary worktree (`--release` for `main`), once per commit. Refuses Bun older than 1.4.4. Skip once with `git push --no-verify`. |
 | `hooks install` | `prepare`: points `core.hooksPath` at `.githooks`, unless someone set another path or `CI` is set. |
 | `hooks sync` | Writes the managed hooks into `.githooks`: a `pre-push` shim and `reference-transaction`. Other hooks there are the repository's own. |
@@ -186,8 +198,8 @@ jobs:
 
 | Workflow | Inputs |
 |---|---|
-| `verify.yml` | `args` (none; `--release` is added for `main` and pull requests into `main`), `runner`, `timeout-minutes` (20) |
-| `browser.yml` | `checks` (JSON list of `{name, run}`), `build`, `playwright` (true), `runner`, `timeout-minutes` (30) |
+| `verify.yml` | `args` (none; `--release` is added for `main` and pull requests into `main`), `runner`, `timeout-minutes` (20), `slot-wait` (0: wait as long as the job runs) |
+| `browser.yml` | `checks` (JSON list of `{name, run}`), `build`, `playwright` (true), `slots` (2: the build and the check lease them together), `slot-wait` (0), `runner`, `timeout-minutes` (30) |
 | `deploy-storybook.yml` | `url`, `environment` (`storybook`); `STORYBOOK_CLOUDFLARE_API_TOKEN` from that environment, with `secrets: inherit` |
 | `release.yml` | `command` (`bun run release:publish`), `enabled` (true), `runner`, `timeout-minutes` (10); the caller grants `contents: write`, `packages: write` |
 

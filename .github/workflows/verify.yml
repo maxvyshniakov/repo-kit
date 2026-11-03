@@ -24,6 +24,10 @@ on:
       timeout-minutes:
         type: number
         default: 20
+      slot-wait:
+        description: Seconds verify waits for its slotfather lease before failing with that reason; 0 waits as long as the job runs.
+        type: number
+        default: 0
 jobs:
   verify:
     runs-on: ${{ fromJSON(inputs.runner) }}
@@ -33,6 +37,7 @@ jobs:
       # bunfig.toml reads @maxvyshniakov packages from GitHub Packages with this
       # token, here and in the packed-consumer check's install.
       GITHUB_TOKEN: ${{ github.token }}
+      REPO_KIT_SLOT_WAIT: ${{ inputs.slot-wait }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.1.2
