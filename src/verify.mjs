@@ -203,29 +203,86 @@ export async function runSteps(steps, start, { now = Date.now, signal, memory = 
  * the group), and every process an earlier sample found in it that is still
  * running (one reparented to init has left the tree). `roots` maps each running
  * step's first pid, its group, to its name; `members` (name -> Set of pids)
- * carries what earlier samples found. Returns name -> { pids, gib }.
+ * carries what earlier samples found. A child of init that no step holds and
+ * `checked` has not seen is offered once to `marked` (pids -> Map of pid to
+ * step name): a daemon such as agent-browser's, orphaned before any sample saw
+ * it, joins the step whose REPO_KIT_STEP its environment carries. Returns
+ * name -> { pids, gib }.
  */
-export function stepProcesses(table, roots, members = new Map()) {
+export function stepProcesses(table, roots, members = new Map(), { marked = () => new Map(), checked = new Set() } = {}) {
   const byPid = new Map(table.map(row => [row.pid, row]));
   const children = new Map();
   for (const row of table) children.set(row.ppid, [...(children.get(row.ppid) ?? []), row.pid]);
-  const found = new Map();
-  for (const [root, name] of roots) {
-    const known = [...(members.get(name) ?? [])].filter(pid => byPid.has(pid));
-    const stack = [root, ...known, ...table.filter(row => row.pgid === root).map(row => row.pid)].filter(pid => byPid.has(pid));
-    const pids = new Set();
+  const tree = (starts, pids = new Set()) => {
+    const stack = starts.filter(pid => byPid.has(pid));
     while (stack.length) {
       const pid = stack.pop();
       if (pids.has(pid)) continue;
       pids.add(pid);
       stack.push(...(children.get(pid) ?? []));
     }
+    return pids;
+  };
+  const names = new Set(roots.values());
+  for (const name of members.keys()) if (!names.has(name)) members.delete(name);
+  const found = new Map();
+  for (const [root, name] of roots) {
+    const known = [...(members.get(name) ?? [])];
+    found.set(name, tree([root, ...known, ...table.filter(row => row.pgid === root).map(row => row.pid)]));
+  }
+  const held = new Set([...found.values()].flatMap(pids => [...pids]));
+  const orphans = table.filter(row => row.ppid === 1 && !held.has(row.pid) && !checked.has(row.pid)).map(row => row.pid);
+  for (const pid of orphans) checked.add(pid);
+  if (orphans.length && names.size) {
+    for (const [pid, name] of marked(orphans)) if (found.has(name)) tree([pid], found.get(name));
+  }
+  const result = new Map();
+  for (const [name, pids] of found) {
     members.set(name, pids);
     let kib = 0;
     for (const pid of pids) kib += byPid.get(pid).rss;
-    found.set(name, { pids, gib: (kib * 1024) / GiB });
+    result.set(name, { pids, gib: (kib * 1024) / GiB });
   }
-  for (const name of members.keys()) if (![...roots.values()].includes(name)) members.delete(name);
+  return result;
+}
+
+// Each step's environment carries REPO_KIT_STEP=<this run>.<step index>, so a
+// process it starts that leaves its tree can still be told apart.
+const STEP_MARK = "REPO_KIT_STEP";
+const RUN_MARK = `${process.pid}-${Date.now().toString(36)}`;
+
+/**
+ * Those of `pids` whose environment carries one of `marks` (REPO_KIT_STEP
+ * value -> step name), as pid -> name. Linux reads /proc/<pid>/environ, macOS
+ * `ps -E`; either shows only the user's own processes (macOS: not platform
+ * binaries), and the rest read as unmarked.
+ */
+export function markedProcesses(pids, marks, { platform = process.platform } = {}) {
+  const found = new Map();
+  if (!pids.length || !marks.size) return found;
+  if (platform === "linux") {
+    for (const pid of pids) {
+      try {
+        const entry = fs.readFileSync(`/proc/${pid}/environ`, "latin1").split("\0").find(item => item.startsWith(`${STEP_MARK}=`));
+        const name = entry && marks.get(entry.slice(STEP_MARK.length + 1));
+        if (name) found.set(pid, name);
+      } catch {
+        // gone, or not ours
+      }
+    }
+    return found;
+  }
+  let output = "";
+  try {
+    output = execFileSync("ps", ["-wwE", "-o", "pid=,command=", "-p", pids.join(",")], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch (error) {
+    output = error.stdout ?? ""; // ps exits 1 when one of the pids is gone
+  }
+  for (const line of output.split("\n")) {
+    const match = line.match(new RegExp(`^\\s*(\\d+) .* ${STEP_MARK}=(\\S+)(?: |$)`));
+    const name = match && marks.get(match[2]);
+    if (name) found.set(Number(match[1]), name);
+  }
   return found;
 }
 
@@ -241,15 +298,6 @@ function parseProcessTable(output) {
 
 const PS_ARGS = ["-A", "-o", "pid=,ppid=,pgid=,rss="];
 
-/** The pids a step runs now (stepProcesses), read synchronously, to stop all of them. */
-export function stepTree(root) {
-  try {
-    const table = parseProcessTable(execFileSync("ps", PS_ARGS, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
-    return [...stepProcesses(table, new Map([[root, "step"]])).get("step").pids];
-  } catch {
-    return [root];
-  }
-}
 
 /**
  * The job's cgroup (cgroup v2, this process's, from /proc/self/cgroup) on
@@ -317,16 +365,18 @@ export function cgroupMemory({ proc = "/proc/self/cgroup", root = "/sys/fs/cgrou
  * step's own peak (`each`), the figure its `memory` declares, and the cgroup's
  * peak (`cgroup`).
  */
-function sampleMemory(roots, { cgroup = cgroupMemory() } = {}) {
+function sampleMemory(roots, marks, { cgroup = cgroupMemory() } = {}) {
   let peak = { total: 0, steps: {} };
   const each = {};
   const members = new Map();
+  const checked = new Set();
+  const marked = pids => markedProcesses(pids, marks);
   const sample = () => {
     cgroup?.sample();
     execFile("ps", PS_ARGS, (error, output) => {
       if (error) return;
       const steps = {};
-      for (const [name, { gib }] of stepProcesses(parseProcessTable(output), roots, members)) {
+      for (const [name, { gib }] of stepProcesses(parseProcessTable(output), roots, members, { marked, checked })) {
         steps[name] = gib;
         each[name] = Math.max(each[name] ?? 0, gib);
       }
@@ -337,6 +387,16 @@ function sampleMemory(roots, { cgroup = cgroupMemory() } = {}) {
   const timer = setInterval(sample, 1000);
   timer.unref();
   return {
+    /** Every process step `name` runs now, read at once: to stop all of them. */
+    processes(name) {
+      const root = [...roots].find(([, step]) => step === name)?.[0];
+      try {
+        const table = parseProcessTable(execFileSync("ps", PS_ARGS, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+        return [...(stepProcesses(table, roots, members, { marked, checked }).get(name)?.pids ?? [root])];
+      } catch {
+        return root ? [root] : [];
+      }
+    },
     stop: () => {
       clearInterval(timer);
       return { ...peak, each, cgroup: cgroup && { path: cgroup.path, ...cgroup.stop() } };
@@ -404,8 +464,8 @@ function lineReader(line) {
   };
 }
 
-function startProcess(step, { root, running }) {
-  const env = { ...process.env };
+function startProcess(step, { root, running, mark }) {
+  const env = { ...process.env, [STEP_MARK]: mark };
   if (step.workers) env.VITEST_MAX_WORKERS = env.REPO_KIT_WORKERS = String(step.workers);
   // Each step gets its own process group, so stopping it reaches its workers too.
   const child = spawn("bun", step.command, { cwd: root, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
@@ -487,11 +547,12 @@ export async function runVerify(config, { release = false, browser = false } = {
   const started = Date.now();
   const tails = new Map();
   const groups = new Map();
-  const memorySamples = sampleMemory(groups);
+  const marks = new Map(steps.map((step, index) => [`${RUN_MARK}.${index}`, step.name]));
+  const memorySamples = sampleMemory(groups, marks);
   const reaper = startReaper();
   const results = await runSteps(steps, step => {
     console.log(`  start ${step.name} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
-    const handle = startProcess(step, { root: config.root, running });
+    const handle = startProcess(step, { root: config.root, running, mark: `${RUN_MARK}.${steps.indexOf(step)}` });
     tails.set(step.name, handle.tail);
     if (handle.pid) {
       groups.set(handle.pid, step.name);

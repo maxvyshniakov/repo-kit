@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { withDefaults } from "../src/config.mjs";
-import { cgroupMemory, chain, normalizeSteps, runSteps, sizeSteps, stepProcesses, unitTestWorkers, verifyCores, verifyMemory, verifySteps } from "../src/verify.mjs";
+import { cgroupMemory, chain, markedProcesses, normalizeSteps, runSteps, sizeSteps, stepProcesses, unitTestWorkers, verifyCores, verifyMemory, verifySteps } from "../src/verify.mjs";
 import { kitRoot, tempRepository } from "./fixtures.mjs";
 
 const names = steps => steps.map(({ name }) => name);
@@ -257,6 +257,33 @@ test("a step's processes are its group, its descendants in sessions of their own
   assert.equal(second.get("lint").gib, 0);
 });
 
+test("a daemon orphaned before any sample saw it joins the step its environment names", () => {
+  const KiB = 1024 ** 2;
+  const row = (pid, ppid, pgid, gib) => ({ pid, ppid, pgid, rss: gib * KiB });
+  const offered = [];
+  const marked = pids => (offered.push(pids), new Map(pids.filter(pid => pid === 700).map(pid => [pid, "browser checks"])));
+  const options = { marked, checked: new Set() };
+  const members = new Map();
+  const roots = new Map([[100, "browser checks"]]);
+  const table = [row(100, 50, 100, 0.1), row(700, 1, 700, 0.5), row(701, 700, 700, 1.5), row(800, 1, 800, 3)];
+  assert.equal(stepProcesses(table, roots, members, options).get("browser checks").gib.toFixed(1), "2.1");
+  assert.deepEqual(offered, [[700, 800]]);
+  // Each orphan is asked about once; the adopted one stays a member.
+  assert.equal(stepProcesses(table, roots, members, options).get("browser checks").gib.toFixed(1), "2.1");
+  assert.deepEqual(offered, [[700, 800]]);
+});
+
+test("markedProcesses reads REPO_KIT_STEP from a process's environment", async () => {
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 10000)"], { env: { ...process.env, REPO_KIT_STEP: "run-1.3" }, stdio: "ignore" });
+  try {
+    await new Promise(resolve => setTimeout(resolve, 200));
+    const marks = new Map([["run-1.3", "browser checks"], ["run-1.30", "other"]]);
+    assert.deepEqual([...markedProcesses([child.pid, process.pid], marks)], [[child.pid, "browser checks"]]);
+  } finally {
+    child.kill("SIGKILL");
+  }
+});
+
 test("the job's cgroup memory: memory.peak reset for this run, or memory.current's samples", () => {
   const GiB = 1024 ** 3;
   const repository = tempRepository({
@@ -291,15 +318,17 @@ test("the job's cgroup memory: memory.peak reset for this run, or memory.current
   }
 });
 
-function runFakeVerify({ failing = "", bytes = 1 << 20, sleepBuild = false, detachedBuild = false } = {}) {
+function runFakeVerify({ failing = "", bytes = 1 << 20, sleepBuild = false, detachedBuild = false, orphanBuild = false } = {}) {
   const repository = fakeRepository(`#!/bin/sh
 node -e 'process.stdout.write("x".repeat(${bytes}) + "\\n")'
 [ "$2" = "${failing}" ] && exit 3
 [ -n "${failing}" ] && sleep 5
 [ "$2" = "test" ] && echo "workers=$VITEST_MAX_WORKERS/$REPO_KIT_WORKERS"
 [ "$2" = "typecheck" ] && echo "workers=$VITEST_MAX_WORKERS/$REPO_KIT_WORKERS"
-[ "$2" = "build" ] && [ -n "${sleepBuild}" ] && node -e 'const a = Buffer.alloc(64 << 20, 1); setTimeout(() => a.length, 2500)'
-[ "$2" = "build" ] && [ -n "${detachedBuild}" ] && node -e 'require("child_process").spawn(process.execPath, ["-e", "const a = Buffer.alloc(384 << 20, 1); setTimeout(() => a.length, 2500)"], { detached: true, stdio: "ignore" })'
+[ "$2" = "build" ] && [ -n "${sleepBuild ? 1 : ""}" ] && node -e 'const a = Buffer.alloc(64 << 20, 1); setTimeout(() => a.length, 2500)'
+# A daemon in a session of its own whose parent exits at once, as agent-browser's does.
+[ "$2" = "build" ] && [ -n "${orphanBuild ? 1 : ""}" ] && node -e 'require("child_process").spawn(process.execPath, ["-e", "const a = Buffer.alloc(384 << 20, 1); setTimeout(() => a.length, 3000)"], { detached: true, stdio: "ignore" }).unref()' && sleep 3
+[ "$2" = "build" ] && [ -n "${detachedBuild ? 1 : ""}" ] && node -e 'require("child_process").spawn(process.execPath, ["-e", "const a = Buffer.alloc(384 << 20, 1); setTimeout(() => a.length, 2500)"], { detached: true, stdio: "ignore" })'
 exit 0
 `);
   try {
@@ -331,6 +360,13 @@ test("a step's peak counts the processes it starts in sessions of their own, as 
   assert.equal(status, 0);
   const build = Number(stdout.match(/\nStep peaks, measured\/declared GiB: .*build ([\d.]+)\/0\.1/)?.[1]);
   assert.ok(build >= 0.3, `the detached 384 MiB process was not counted:\n${stdout.slice(-600)}`);
+});
+
+test("a step's peak counts a daemon it started that was orphaned at once, as agent-browser's is", () => {
+  const { status, stdout } = runFakeVerify({ bytes: 10, orphanBuild: true });
+  assert.equal(status, 0);
+  const build = Number(stdout.match(/\nStep peaks, measured\/declared GiB: .*build ([\d.]+)\/0\.1/)?.[1]);
+  assert.ok(build >= 0.3, `the orphaned 384 MiB daemon was not counted:\n${stdout.slice(-600)}`);
 });
 
 test("a failing step fails verify and stops the steps beside it", () => {
