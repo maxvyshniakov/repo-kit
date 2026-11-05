@@ -23,7 +23,7 @@ test("repo-kit's own repository passes repo-kit check", () => {
   assert.deepEqual(kitIssues(kitRoot), []);
 });
 
-test("the reference-transaction copy is Straylight's, pinned by hash", () => {
+test("the reference-transaction copy is Lanefather's, pinned by hash", () => {
   assert.equal(sha256(fs.readFileSync(path.join(kitRoot, "hooks/reference-transaction"))), REFERENCE_TRANSACTION_SHA256);
   assert.match(managedHooks()["reference-transaction"], /^#!\/usr\/bin\/env bash\n# One writer for main and dev/);
 });

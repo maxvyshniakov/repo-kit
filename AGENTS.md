@@ -10,7 +10,7 @@ authorization.
 - Behavior changes need focused tests in `test/`. Consumer-visible changes go under `## Unreleased` in CHANGELOG.md.
 - The kit runs in every consumer's pre-push hook and CI. Keep it dependency-free.
 - Keep its behavior a union of what the consumers relied on: a fix to one consumer's needs must not drop another's.
-- `hooks/reference-transaction` is a pinned copy of Straylight's `tools/agent-hooks/reference-transaction`. Change it
+- `hooks/reference-transaction` is a pinned copy of Lanefather's `hooks/reference-transaction`. Change it
   only by copying that file and updating `REFERENCE_TRANSACTION_SHA256`.
 - Checks: [docs/agents/checks.md](docs/agents/checks.md).
 - Commit, push and release: [docs/agents/publishing.md](docs/agents/publishing.md).

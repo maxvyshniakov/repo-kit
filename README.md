@@ -169,6 +169,46 @@ Re-measure after a change that adds tests or stories; a peak above its declared 
 | `packed-consumer [--keep]` | Packs, installs into a temporary consumer, imports every entrypoint in plain Node, type-checks under `nodenext` without `skipLibCheck`, then runs the probes. Optional peers are not installed. |
 | `shoot <story id filter...> [<url>\|--url=] [--theme=] [--width=] [--browser=] [--out=] [--viewport]` | [Story screenshots](#story-screenshots) from a running Storybook, under a lease of `shoot.slots`. |
 
+## Working with Lanefather
+
+The shared orchestration process and implementer brief already live in
+[Mastack's orchestrate skill](https://github.com/maxvyshniakov/mastack/tree/main/skills/orchestrate).
+[Lanefather](https://github.com/maxvyshniakov/lanefather) supplies lanes, path claims, integration, independent
+review and protected-branch promotion for projects that configure it. repo-kit supplies verification and package
+release/publish commands. Slotfather leases the machine while those commands execute; an active lane itself holds
+no machine slots.
+
+A consumer adopting parallel lanes keeps its check-contract adapter and project seams in `.lanefather.toml`.
+Follow that project's orchestration instructions and configured command (`tools/lane` is Straylight's entry point):
+
+| Phase | Owner and evidence |
+|---|---|
+| Implement and check a lane | Lanefather registers the lane and its claims. Its `check` calls the project's adapter and records a receipt for the committed inputs. repo-kit's verification steps run where the adapter/config selects them. |
+| Integrate and review | Lanefather `land` merges onto the integration branch, runs the configured post-merge smoke and starts the independent review. Findings receive the project's fix round before promotion. |
+| Publish a batch | Lanefather `promote <sha>` takes the landing lock and pushes an explicit commit. A project with a verified-tree contract gets its configured batch gate. A library without that contract relies on repo-kit's mandatory clean-worktree pre-push gate. |
+| Release a package | Follow the consumer's publishing contract for its release commit and branches, then run the release gate and publish. Registry publication and consumer adoption remain separate steps. |
+
+A consumer using Lanefather's `dev`/`main` branch policy can use its protected-branch promotion without adopting
+parallel lanes first:
+
+```sh
+lanefather promote <commit-sha>                # dev
+lanefather promote <release-commit-sha> --ship  # dev and main, for an authorized release
+```
+
+Keep the consumer's `.githooks/pre-push` active. It verifies the exact pushed commit with the kit pinned by that
+commit and records its own passed result. A lane receipt or smoke is separate evidence. Let the configured
+promotion/pre-push path run the full gate; running `bun run verify` manually immediately before it duplicates
+work. Projects sharing batch-gate evidence with a hook must provide that explicit contract.
+
+The plain `repo-kit verify` CLI does not implement Lanefather's plan/report protocol. Configuring only
+`checks.verify = "bun run verify"` is insufficient for `lanefather check`; a parallel-work project needs the
+adapter described by [Lanefather's check contract](https://github.com/maxvyshniakov/lanefather#the-check-contract).
+
+Repo-kit's own repository has no lane adapter and uses one active `main` branch. Its task-worktree process is in
+[orchestration](docs/agents/orchestration.md); the explicit-SHA push, pre-push gate and CI procedure is in
+[publishing](docs/agents/publishing.md).
+
 ## Story screenshots
 
 ```sh
@@ -437,7 +477,7 @@ A release:
 
 - the changelog check;
 - `repo-kit check` on this repository;
-- a comparison of `hooks/reference-transaction` with Straylight's (skipped without a checkout);
+- a comparison of `hooks/reference-transaction` with Lanefather's canonical copy (skipped without a checkout);
 - the tests;
 - the packed-consumer check.
 
@@ -450,11 +490,14 @@ validation on `main`; they can configure `prePush.releaseBranches` themselves.
 Agent commands and repository policy: [checks](docs/agents/checks.md),
 [publishing](docs/agents/publishing.md), [orchestration](docs/agents/orchestration.md).
 
-`hooks/reference-transaction` is Straylight's `tools/agent-hooks/reference-transaction` (one writer for `main` and
-`dev`, landing lock from `tools/lane promote`). Its canonical home moves to lanefather. Until then, repo-kit carries
-the copy, pinned by `REFERENCE_TRANSACTION_SHA256` in `src/hooks.mjs`, and only installs it.
+`hooks/reference-transaction` comes from Lanefather's `hooks/reference-transaction`: one writer for `main` and
+`dev`, using the landing lock held by `lanefather promote` (or the project's configured entry point). repo-kit
+distributes the exact copy, pinned by `REFERENCE_TRANSACTION_SHA256` in `src/hooks.mjs`, and installs it in
+consumers' managed hooks. Repo-kit's own single-branch checkout omits it. `check:upstream` compares it with
+`LANEFATHER_DIR/hooks/reference-transaction`; the checkout defaults to `~/lanefather`. `LANEFATHER_DIR` selects a
+source checkout for this comparison, not the runtime engine.
 
-When Straylight's copy changes:
+When Lanefather's canonical hook changes:
 
 1. copy it here;
 2. update the hash;

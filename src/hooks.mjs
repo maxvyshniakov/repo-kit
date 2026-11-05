@@ -6,10 +6,9 @@
 //   repo-kit hooks status    fail when Git would not run every tracked hook (local diagnosis)
 //
 // Managed hooks: pre-push, a shim into repo-kit's pre-push command, and
-// reference-transaction, a verbatim copy of Straylight's
-// tools/agent-hooks/reference-transaction (one writer for main and dev). Its
-// canonical home moves to lanefather; until then the copy is pinned by
-// REFERENCE_TRANSACTION_SHA256. Other files in .githooks belong to the repository.
+// reference-transaction, a verbatim copy of Lanefather's hooks/reference-transaction
+// (one writer for main and dev), pinned by REFERENCE_TRANSACTION_SHA256.
+// Other files in .githooks belong to the repository.
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -18,7 +17,7 @@ import { fileURLToPath } from "node:url";
 
 const kitRoot = fileURLToPath(new URL("..", import.meta.url));
 
-export const REFERENCE_TRANSACTION_SHA256 = "650f3ed7c03e32630375d66a894dcca2e3fb3b3bd61e92345cea9116cbead5b0";
+export const REFERENCE_TRANSACTION_SHA256 = "8fbd90c9562f94c4f45eb841351bc657b217160e511508367b0c8fbed29203f9";
 
 export function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
