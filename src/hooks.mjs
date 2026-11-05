@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 
 const kitRoot = fileURLToPath(new URL("..", import.meta.url));
 
-export const REFERENCE_TRANSACTION_SHA256 = "0b055a254439f3ce2cb147a41b220a0a027d2d242277598976efd3314dd712c5";
+export const REFERENCE_TRANSACTION_SHA256 = "650f3ed7c03e32630375d66a894dcca2e3fb3b3bd61e92345cea9116cbead5b0";
 
 export function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");

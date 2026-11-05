@@ -3,9 +3,10 @@
 # (CLAUDECODE=1, or any CODEX_* variable set), refuses a ref transaction that moves
 # refs/heads/main or refs/heads/dev unless LANDING_TOKEN matches the token of the
 # landing lock, $(git rev-parse --git-common-dir)/landing.lock, taken less than 2 h
-# ago. Straylight's tools/lane land and tools/lane promote take the lock and set the
-# token. It also refuses writing ORIG_HEAD while main or dev is checked out, the first
-# ref a merge or pull writes, so a refused fast-forward leaves the worktree untouched.
+# ago. Straylight's tools/lane land, promote and sync take the lock and set the token;
+# the refusal names the lane command for each legal move (#666). It also refuses
+# writing ORIG_HEAD while main or dev is checked out, the first ref a merge or pull
+# writes, so a refused fast-forward leaves the worktree untouched.
 # Fetches (refs/remotes/*), other branches, tags and no-op updates pass; so does
 # everyone outside an agent session. The hook fails open: a lock it cannot parse
 # passes with a warning. The same file serves Sid-Kit and Data Grid
@@ -75,7 +76,9 @@ fi
 printf '%s\n' >&2 \
   "reference-transaction: refusing to update ${protected[*]} from an agent session ($agent)." \
   "main and dev have one writer. $status" \
-  "Commit on a lane or integration branch, land it with tools/lane land <id>, and move" \
-  "main or dev only with Straylight's tools/lane promote <sha> [--ship], run in this" \
-  "repository: it takes the landing lock, fast-forwards the local branch and pushes."
+  "Commit on a lane or integration branch and land it with tools/lane land <id>. Move main" \
+  "or dev only with Straylight's tools/lane, run in this repository; it takes the landing lock:" \
+  "  tools/lane promote <sha> [--ship]  publish <sha>: push it to dev (and main), then fast-forward" \
+  "  tools/lane sync                    catch local main and dev up with origin" \
+  "  tools/lane sync --drop-local       drop stale local commits; a backup/ branch keeps them"
 exit 1

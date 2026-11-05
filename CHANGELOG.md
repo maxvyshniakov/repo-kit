@@ -12,6 +12,10 @@ Versions and release rules: [README.md](README.md#versioning).
 
 - Repo-kit's own workflow uses one `main` branch with ordinary push checks and an explicit release gate. Its own hooks omit the Straylight branch-movement guard; consumer hooks retain it.
 
+### Fixed
+
+- Refresh the canonical consumer branch guard so refusals name lane sync and its backup-preserving recovery command.
+
 ## 0.3.1 - 2026-11-04
 
 ### Added
