@@ -181,3 +181,23 @@ process.exitCode = await runLeased(1, ["sh", "-c", ${JSON.stringify(`trap 'echo 
     repository.cleanup();
   }
 });
+
+ test("repo-kit itself uses only the pre-push hook; consumer branch protection stays enabled", () => {
+  assert.equal(managedHooks({ self: true })["reference-transaction"], undefined);
+  assert.ok(managedHooks()["reference-transaction"]);
+});
+
+test("self hook sync retires only its unchanged old branch guard", () => {
+ const repository=tempRepository({"package.json":{name:"@maxvyshniakov/repo-kit"}});
+ try {
+  const guard=path.join(repository.root,".githooks/reference-transaction");
+  fs.mkdirSync(path.dirname(guard),{recursive:true});
+  fs.writeFileSync(guard,managedHooks()["reference-transaction"]);
+  quietly(()=>syncHooks(repository.root));
+  assert.ok(!fs.existsSync(guard));
+  assert.deepEqual(hookIssues(repository.root),[]);
+  fs.writeFileSync(guard,"custom guard");
+  assert.throws(()=>syncHooks(repository.root),/customized/);
+  assert.equal(fs.readFileSync(guard,"utf8"),"custom guard");
+ } finally {repository.cleanup();}
+});

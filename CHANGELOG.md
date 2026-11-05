@@ -4,6 +4,14 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+### Added
+
+- `prePush.releaseBranches` selects branches requiring release validation; the default remains `main` for consumers.
+
+### Changed
+
+- Repo-kit's own workflow uses one `main` branch with ordinary push checks and an explicit release gate. Its own hooks omit the Straylight branch-movement guard; consumer hooks retain it.
+
 ## 0.3.1 - 2026-11-04
 
 ### Added

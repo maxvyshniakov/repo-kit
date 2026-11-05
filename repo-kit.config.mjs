@@ -8,6 +8,7 @@ import path from "node:path";
 const VERSIONED_FILES = [".github/workflows", "README.md"];
 
 export default {
+  prePush: { releaseBranches: [] },
   verify: {
     // Its steps take seconds; a hung one fails well inside check.yml's 15 minutes.
     stepTimeout: 5,

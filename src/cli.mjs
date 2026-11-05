@@ -65,10 +65,10 @@ export async function main([command, ...args]) {
       // gets them on its stdin.
       const [{ leaseSelf }, { pushedCommits, reportPassed, runPrePush }] = await Promise.all([import("./heavy.mjs"), import("./pre-push.mjs")]);
       const stdin = fs.readFileSync(0, "utf8");
-      const { passed, left } = pushedCommits(stdin);
+      const { passed, left } = pushedCommits(stdin, undefined, config.prePush.releaseBranches);
       if (!left.length) return reportPassed(passed), 0;
       if (await leaseSelf(config.prePush.slots, { input: stdin })) return process.exitCode;
-      return runPrePush({ stdin });
+      return runPrePush({ stdin, releaseBranches: config.prePush.releaseBranches });
     }
     case "hooks": {
       const hooks = await import("./hooks.mjs");

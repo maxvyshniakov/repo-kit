@@ -58,6 +58,12 @@ The command names stay as they were, so instructions and skills that name them k
 
 `repo-kit verify` and `repo-kit pre-push` take their own slotfather lease (`verify.slots`, `verify.browserSlots`,
 `prePush.slots`). Other heavy scripts wrap themselves: `"check:stories": "repo-kit heavy 2 bun scripts/run-story-checks.mjs"`.
+Slotfather priority defaults to `normal`; ticket is optional. For tagged ad-hoc
+runs, use `slotfather run -n K --priority interactive --ticket ID -- repo-kit ...`.
+The kit detects the inherited lease and does not acquire a second one. Lane
+registration and integration belong to the project's orchestration contract;
+repo-kit owns verification execution rather than lane lifecycle.
+
 `REPO_KIT_SLOT_WAIT=<seconds>` makes every lease give up after that long (slotfather exits 75), so a CI job fails with
 that reason instead of reaching its time limit while queued.
 
@@ -418,7 +424,7 @@ A release:
 1. Cut the version with `bun run release -- <patch|minor|major>`. This also moves every `maxvyshniakov/repo-kit/...@v`
    reference in the workflows and this README to the new tag. The reusable workflows reference the action at that
    tag, which `publish` creates on the release commit.
-2. Push the release commit to `dev` and `main`.
+2. Push the release commit to `main`.
 3. Run `bun run repo-kit release-gate origin/main`, then `bun run release:publish` (gate `local`, this repository's
    default). Under gate `ci`, run `release:publish` once Library checks pass on `main`; repo-kit's own checks use
    `./actions/setup-bun` from the commit itself, so they run before the tag exists.
@@ -435,7 +441,14 @@ A release:
 - the tests;
 - the packed-consumer check.
 
-The pre-push hook runs the same.
+The pre-push hook runs the same. This repository uses `main` for everyday work;
+version tags identify releases. Its `prePush.releaseBranches: []` keeps ordinary
+main pushes compatible with `Unreleased` entries. `release-gate` still runs
+`verify --release` before package publication. Consumers default to release
+validation on `main`; they can configure `prePush.releaseBranches` themselves.
+
+Agent commands and repository policy: [checks](docs/agents/checks.md),
+[publishing](docs/agents/publishing.md), [orchestration](docs/agents/orchestration.md).
 
 `hooks/reference-transaction` is Straylight's `tools/agent-hooks/reference-transaction` (one writer for `main` and
 `dev`, landing lock from `tools/lane promote`). Its canonical home moves to lanefather. Until then, repo-kit carries

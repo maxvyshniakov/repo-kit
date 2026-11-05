@@ -52,7 +52,7 @@ exec node "$cli" pre-push "$@"
 export function managedHooks({ self = false } = {}) {
   return {
     "pre-push": prePushShim({ self }),
-    "reference-transaction": fs.readFileSync(path.join(kitRoot, "hooks/reference-transaction"), "utf8"),
+    ...(!self ? { "reference-transaction": fs.readFileSync(path.join(kitRoot, "hooks/reference-transaction"), "utf8") } : {}),
   };
 }
 
@@ -63,6 +63,12 @@ function isSelf(root) {
 export function syncHooks(root) {
   const dir = path.join(root, ".githooks");
   fs.mkdirSync(dir, { recursive: true });
+  const retired = path.join(dir, "reference-transaction");
+  if (isSelf(root) && fs.existsSync(retired)) {
+    const canonical = fs.readFileSync(path.join(kitRoot, "hooks/reference-transaction"), "utf8");
+    if (fs.readFileSync(retired, "utf8") !== canonical) throw new Error("Preserve the customized reference-transaction hook before syncing repo-kit's own hooks");
+    fs.unlinkSync(retired);
+  }
   for (const [name, contents] of Object.entries(managedHooks({ self: isSelf(root) }))) {
     fs.writeFileSync(path.join(dir, name), contents, { mode: 0o755 });
     fs.chmodSync(path.join(dir, name), 0o755);

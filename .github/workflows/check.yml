@@ -11,7 +11,7 @@ permissions:
   contents: read
   packages: read
 # Jobs run on the self-hosted homelab runner (maxvyshniakov/proxmox
-# docs/ci-runner.md). Pushes to dev run only the local pre-push hook.
+# docs/ci-runner.md). Every main push runs ordinary verification.
 concurrency:
   group: checks-${{ github.ref }}
   # A newer push to a pull request supersedes its older run; every main commit
@@ -26,7 +26,5 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: ./actions/setup-bun
-      # --release for main and pull requests into main, as verify.yml decides.
-      - run: bun run verify -- $RELEASE_ARGS
-        env:
-          RELEASE_ARGS: ${{ (github.ref == 'refs/heads/main' || github.base_ref == 'main') && '--release' || '' }}
+      # Release validation remains in the explicit release-gate command.
+      - run: bun run verify

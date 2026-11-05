@@ -12,7 +12,9 @@ authorization.
 - Keep its behavior a union of what the consumers relied on: a fix to one consumer's needs must not drop another's.
 - `hooks/reference-transaction` is a pinned copy of Straylight's `tools/agent-hooks/reference-transaction`. Change it
   only by copying that file and updating `REFERENCE_TRANSACTION_SHA256`.
-- `bun run verify` is the push gate. The pre-push hook runs it, so do not run it by hand right before pushing.
-- Everyday pushes go to `dev`. A release pushes the same tip to `dev` and `main`. Push through Straylight's
-  `tools/lane promote`.
+- Checks: [docs/agents/checks.md](docs/agents/checks.md).
+- Commit, push and release: [docs/agents/publishing.md](docs/agents/publishing.md).
+- Parallel work: [docs/agents/orchestration.md](docs/agents/orchestration.md).
+- Domain reference: [docs/agents/domain.md](docs/agents/domain.md).
+- Issues: [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
 - Several agents may share this working tree. Never stash, check out, restore or reset files you did not change.

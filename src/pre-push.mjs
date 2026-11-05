@@ -17,7 +17,7 @@ import path from "node:path";
 import { bunTooOld, localBunVersion, resolveToken, TOKEN_HINT } from "./token.mjs";
 
 const ZERO = /^0+$/;
-const RELEASE_REF = "refs/heads/main";
+const RELEASE_BRANCHES = ["main"];
 
 // Commits that passed, one "<sha>[ release]" per line in the common Git
 // directory. Earlier copies of this hook used the other names.
@@ -25,13 +25,13 @@ export const VERIFIED_RECORD = "repo-kit-verified";
 const LEGACY_RECORDS = ["sid-kit-verified", "verified-commits"];
 
 /** Git passes "<local ref> <local sha> <remote ref> <remote sha>" per line. */
-export function commitsToVerify(stdin) {
+export function commitsToVerify(stdin, releaseBranches = RELEASE_BRANCHES) {
   const commits = new Map();
   for (const line of stdin.split("\n")) {
     const [localRef, localSha, remoteRef] = line.trim().split(/\s+/);
     if (!localSha || ZERO.test(localSha)) continue; // deleting a ref
     if (localRef.startsWith("refs/tags/") || remoteRef?.startsWith("refs/tags/")) continue;
-    const release = remoteRef === RELEASE_REF;
+    const release = releaseBranches.some(branch => remoteRef === `refs/heads/${branch}`);
     commits.set(localSha, (commits.get(localSha) ?? false) || release);
   }
   return [...commits].map(([sha, release]) => ({ sha, release }));
@@ -47,8 +47,8 @@ export function verifyLabel(release) {
 }
 
 /** The pushed commits that have not passed yet: a release needs a release pass. */
-export function pendingCommits(stdin, verified) {
-  return commitsToVerify(stdin).filter(({ sha, release }) => !verified.has(verifiedKey(sha, release)));
+export function pendingCommits(stdin, verified, releaseBranches = RELEASE_BRANCHES) {
+  return commitsToVerify(stdin, releaseBranches).filter(({ sha, release }) => !verified.has(verifiedKey(sha, release)));
 }
 
 /**
@@ -57,9 +57,9 @@ export function pendingCommits(stdin, verified) {
  * some are left: a push of commits that passed would otherwise wait for slots
  * to run nothing.
  */
-export function pushedCommits(stdin, env = cleanEnvironment()) {
-  const left = pendingCommits(stdin, readVerified(commonGitDir(env)));
-  const passed = commitsToVerify(stdin).filter(({ sha, release }) => !left.some(commit => commit.sha === sha && commit.release === release));
+export function pushedCommits(stdin, env = cleanEnvironment(), releaseBranches = RELEASE_BRANCHES) {
+  const left = pendingCommits(stdin, readVerified(commonGitDir(env)), releaseBranches);
+  const passed = commitsToVerify(stdin, releaseBranches).filter(({ sha, release }) => !left.some(commit => commit.sha === sha && commit.release === release));
   return { passed, left };
 }
 
@@ -101,11 +101,11 @@ export function verifyCommand(worktree, release) {
   return undefined;
 }
 
-export function runPrePush({ stdin = fs.readFileSync(0, "utf8") } = {}) {
+export function runPrePush({ stdin = fs.readFileSync(0, "utf8"), releaseBranches = RELEASE_BRANCHES } = {}) {
   const env = cleanEnvironment();
   const git = (...args) => execFileSync("git", args, { encoding: "utf8", env }).trim();
   const gitDir = commonGitDir(env);
-  const { passed, left: commits } = pushedCommits(stdin, env);
+  const { passed, left: commits } = pushedCommits(stdin, env, releaseBranches);
   reportPassed(passed);
   if (!commits.length) return 0;
   const tooOld = bunTooOld(localBunVersion());

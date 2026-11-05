@@ -61,7 +61,7 @@ test("a commit verifies with its own verify script, an older scripts/verify.mjs,
 
 // A repository with repo-kit linked into node_modules and its synced hooks; the
 // tracked hook runs against fake bun, gh and slotfather that log what they see.
-function pushFixture({ slotfather = true, lease = "", exit = "0", release = false, token, ghToken, bunVersion = "1.4.4", historical = false } = {}) {
+function pushFixture({ slotfather = true, lease = "", exit = "0", release = false, token, ghToken, bunVersion = "1.4.4", historical = false, releaseBranches } = {}) {
   const repository = tempRepository({
     "package.json": historical
       ? { name: "@maxvyshniakov/example", version: "0.1.0", scripts: {} }
@@ -70,6 +70,10 @@ function pushFixture({ slotfather = true, lease = "", exit = "0", release = fals
     // As the README's config does; a linked worktree must resolve it too.
     "repo-kit.config.mjs": 'import { chain } from "@maxvyshniakov/repo-kit";\nexport default { prePush: { slots: 3 }, verify: { steps: chain([]) } };\n',
   });
+  if (releaseBranches !== undefined) {
+    const config = path.join(repository.root, "repo-kit.config.mjs");
+    fs.writeFileSync(config, fs.readFileSync(config, "utf8").replace("slots: 3", `slots: 3, releaseBranches: ${JSON.stringify(releaseBranches)}`));
+  }
   const { root } = repository;
   const log = path.join(root, ".probe.log");
   const bin = path.join(root, ".bin");
@@ -261,4 +265,20 @@ test("a tag-only push verifies nothing and takes no slot", () => {
   } finally {
     fixture.cleanup();
   }
+});
+
+test("a single-branch repository can reserve release validation for the explicit release gate", () => {
+ const line = "refs/heads/main abc refs/heads/main def\n";
+ assert.deepEqual(commitsToVerify(line, []), [{sha:"abc",release:false}]);
+ assert.deepEqual(commitsToVerify(line), [{sha:"abc",release:true}]);
+});
+
+test("the real pre-push hook applies configured ordinary-main validation", () => {
+ const fixture = pushFixture({release:true,releaseBranches:[],token:"fixture"});
+ try {
+  const {result,lines}=fixture.run();
+  assert.equal(result.status,0,result.stderr+result.stdout);
+  assert.ok(lines.includes("verify:bun:verify:fixture-lease"),lines.join("\n"));
+  assert.ok(!lines.some(line=>line.includes("--release")));
+ } finally {fixture.cleanup();}
 });
