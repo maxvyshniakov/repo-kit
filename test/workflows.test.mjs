@@ -40,11 +40,11 @@ test("verify.yml passes --release for main and pull requests into main only", ()
   assert.match(text, /args:\n(?:\s+\w.*\n)*?\s+default: ""\n/, "args must not default to --release");
 });
 
-test("repo-kit's own checks use the action from their own commit and decide --release as verify.yml does", () => {
+test("repo-kit's own main checks use the current action and ordinary verification", () => {
   const text = read(path.join(workflowsDir, "check.yml"));
   assert.match(text, /- uses: \.\/actions\/setup-bun\n/);
-  assert.ok(text.includes(releaseArgs));
-  assert.match(text, /- run: bun run verify -- \$RELEASE_ARGS\n/);
+  assert.ok(!text.includes(releaseArgs));
+  assert.match(text, /- run: bun run verify\n/);
   assert.match(text, /cancel-in-progress: \$\{\{ github.event_name == 'pull_request' \}\}/);
   assert.match(text, /workflow_dispatch:/);
 });
