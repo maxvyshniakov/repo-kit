@@ -247,3 +247,26 @@ test('a timed-out command has a failed report and blocks its dependants', () => 
     assert.equal(report.checks[1].status, 'blocked');
   } finally { repo.cleanup(); }
 });
+
+test('keep-going collects independent results after a failure and blocks only dependants', () => {
+  const repo = tempRepository({
+    'package.json': { name: 'collect-fixture', type: 'module' },
+    '.gitignore': 'collected\n',
+    'repo-kit.config.mjs': `export default {verify:{steps:[
+      {name:'broken',command:['-e','process.exit(7)']},
+      {name:'independent',command:['-e',"setTimeout(()=>require('fs').writeFileSync('collected','yes'),100)"]},
+      {name:'dependent',needs:['broken'],command:['-e','process.exit(0)']}
+    ]}};`,
+  }, { git: true });
+  try {
+    const result = spawnSync(process.execPath, [adapter, '--keep-going', '--jobs', '1'],
+      { cwd: repo.root, env: repo.env, encoding: 'utf8', timeout: 12000 });
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    const report = JSON.parse(fs.readFileSync(/^Verification report: (.+)$/m.exec(result.stdout)[1], 'utf8'));
+    assert.deepEqual(report.checks.map(({ id, status }) => [id, status]), [
+      ['verify:broken','failed'], ['verify:independent','passed'], ['verify:dependent','blocked'],
+    ]);
+    assert.equal(fs.readFileSync(path.join(repo.root, 'collected'), 'utf8'), 'yes');
+    assert.deepEqual(report.checks[2].blocked_by, ['verify:broken']);
+  } finally { repo.cleanup(); }
+});

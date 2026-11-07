@@ -90,7 +90,7 @@ export async function main(args) {
     needs: [...step.needs.map(name => `${suite}:${encodeURIComponent(name)}`),
       ...(suite === 'browser' ? normalIds : [])],
   }));
-  const result = await runVerify(config, { steps, maxCores: jobs, env: gitEnv,
+  const result = await runVerify(config, { steps, maxCores: jobs, env: gitEnv, keepGoing: Boolean(values['keep-going']),
     onLine: (step, text) => fs.appendFileSync(logs.get(step.name), text + '\n'),
   });
   const environment = git('rev-parse', 'HEAD') !== head || git('status', '--porcelain')
@@ -100,10 +100,11 @@ export async function main(args) {
     interrupted: result.interrupted,
     checks: steps.map(step => {
       const row = byName.get(step.name);
+      const blockedBy = row ? [] : step.needs.filter(id => byName.get(id)?.status !== 'ok');
       return { id: step.name, suite: byId.get(step.name).suite,
-        status: environment ? 'void' : row ? { ok: 'passed', fail: 'failed', stopped: 'cancelled' }[row.status] : 'blocked',
+        status: environment ? 'void' : row ? { ok: 'passed', fail: 'failed', stopped: 'cancelled' }[row.status] : (!result.interrupted && blockedBy.length ? 'blocked' : 'cancelled'),
         seconds: row?.seconds ?? 0, timed_out: Boolean(row?.timedOut), log: logs.get(step.name),
-        blocked_by: row ? [] : step.needs.filter(id => byName.get(id)?.status !== 'ok'),
+        blocked_by: blockedBy,
       };
     }),
   };

@@ -14,12 +14,17 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ### Changed
 
+- Replace the README's maintainer-specific introduction with use cases, a minimal setup and explicit tool boundaries; keep the detailed contract in the packaged reference.
+- Repo-Kit's own pull-request checks use GitHub-hosted runners with checkout credentials disabled; reusable consumer runner defaults remain explicit configuration.
+
 - The consumer protected-branch hook follows Lanefather's canonical source. `check:upstream` uses `LANEFATHER_DIR` (default `~/lanefather`) instead of Straylight's project copy; the pinned hash still guards installations without a source checkout.
 - Document the Mastack/Lanefather/repo-kit/Slotfather workflow boundaries for consumers, including the lane adapter and pre-push evidence contracts. Repo-kit's own main-only publishing contract remains separate.
 
 - Repo-kit's own workflow uses one `main` branch with ordinary push checks and an explicit release gate. Its own hooks omit the Straylight branch-movement guard; consumer hooks retain it.
 
 ### Fixed
+
+- The lane adapter honors `--keep-going`: independent checks finish after a failure while dependants remain blocked; ordinary verification remains fail-fast.
 
 - Refresh the canonical consumer branch guard so refusals name lane sync and its backup-preserving recovery command.
 

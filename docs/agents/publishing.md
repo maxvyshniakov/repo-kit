@@ -21,7 +21,7 @@ remove only worktrees belonging to completed, integrated work.
 `check.yml` (Library checks) runs on main and pull requests. Follow
 `gh run list --repo maxvyshniakov/repo-kit --commit <sha>` and
 `gh run watch <run-id> --repo maxvyshniakov/repo-kit --exit-status` to completion.
-The self-hosted homelab runner may queue; report an unavailable runner separately.
+This repository's checks use GitHub-hosted Ubuntu runners; consumer reusable workflows have their own runner configuration.
 
 ## Release
 

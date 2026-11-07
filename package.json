@@ -21,6 +21,7 @@
     "src",
     "hooks",
     "README.md",
+    "docs/reference.md",
     "CHANGELOG.md",
     "LICENSE"
   ],

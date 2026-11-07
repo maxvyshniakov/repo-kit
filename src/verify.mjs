@@ -157,12 +157,12 @@ export function sizeSteps(steps, { workers, workerMemory = WORKER_MEMORY_GIB }) 
  * Runs each step once the steps it needs have passed and its `memory` fits in
  * the run's `memory` beside the running steps, every such step at once; one
  * that never fits runs alone. `start(step)` returns { done: Promise<boolean>,
- * stop(signal), stopped }. After the first failure, or once `signal` aborts (its
- * reason is the signal name to forward), nothing new starts and the running
- * steps are stopped. Resolves, once every started step has ended, to { name,
+ * stop(signal), stopped }. After the first failure, fail-fast mode stops running steps and starts no more;
+ * `keepGoing` lets independent work finish while dependants remain blocked.
+ * An aborted `signal` stops every running step in either mode. Resolves, once every started step has ended, to { name,
  * status: "ok" | "fail" | "stopped", seconds } per started step.
  */
-export async function runSteps(steps, start, { now = Date.now, signal, memory = Infinity } = {}) {
+export async function runSteps(steps, start, { now = Date.now, signal, memory = Infinity, keepGoing = false } = {}) {
   const results = new Map();
   const running = new Map();
   let held = 0;
@@ -187,7 +187,7 @@ export async function runSteps(steps, start, { now = Date.now, signal, memory = 
           held -= needed;
           const status = passed ? "ok" : handle.stopped ? "stopped" : "fail";
           results.set(step.name, { name: step.name, status, seconds: (now() - started) / 1000, ...(handle.timedOut ? { timedOut: true } : {}) });
-          if (status === "fail" && !halted) halt("SIGTERM");
+          if (status === "fail" && !halted && !keepGoing) halt("SIGTERM");
           launch();
         });
       }
@@ -559,7 +559,7 @@ function startProcess(step, { root, running, mark, processes = () => [], onLine 
 }
 
 /** Runs the gate in `root`; sets process.exitCode rather than exiting, so piped output drains. */
-export async function runVerify(config, { release = false, browser = false, steps: declaredSteps, onLine, maxCores = Infinity, env = process.env } = {}) {
+export async function runVerify(config, { release = false, browser = false, steps: declaredSteps, onLine, maxCores = Infinity, env = process.env, keepGoing = false } = {}) {
   const cores = Math.min(verifyCores(), maxCores);
   const memory = verifyMemory();
   const { workerMemory } = config.verify;
@@ -608,7 +608,7 @@ export async function runVerify(config, { release = false, browser = false, step
       });
     }
     return handle;
-  }, { signal: interrupt.signal, memory });
+  }, { signal: interrupt.signal, memory, keepGoing });
   const peak = memorySamples.stop();
   reaper.done();
   for (const { name, timedOut } of results.filter(result => result.status === "fail")) {

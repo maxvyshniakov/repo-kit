@@ -137,7 +137,7 @@ test("the Storybook deploy reads the Cloudflare token from its environment, by n
   assert.match(text, /STORYBOOK_CLOUDFLARE_API_TOKEN:\n {8}description: .*\n {8}required: false/);
   assert.equal(text.match(/CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.STORYBOOK_CLOUDFLARE_API_TOKEN \}\}/g)?.length, 2);
   assert.ok(text.indexOf("Require the environment's Cloudflare token") < text.indexOf("bun run storybook:deploy"));
-  assert.match(read(path.join(kitRoot, "README.md")), /deploy-storybook\.yml@v[\d.]+\n(?: {4}.*\n)*? {4}secrets: inherit/);
+  assert.match(read(path.join(kitRoot, "docs/reference.md")), /deploy-storybook\.yml@v[\d.]+\n(?: {4}.*\n)*? {4}secrets: inherit/);
 });
 
 test("the Storybook deploy follows release.gate: it runs whatever the checks concluded under local, only after they passed under ci", () => {
@@ -152,8 +152,16 @@ test("the Storybook deploy follows release.gate: it runs whatever the checks con
   const after = text.slice(gate).split("\n      - ").slice(1);
   assert.ok(after.length >= 3, after.join("\n---\n"));
   for (const step of after) assert.match(step, /^if: steps\.gate\.outputs\.run == 'true'\n/, step);
-  // The README's caller lets the deploy start when a check failed, so the gate decides.
-  const readme = read(path.join(kitRoot, "README.md"));
+  // The full workflow example moved from README to the reference; keep validating its gate semantics.
+  const readme = read(path.join(kitRoot, "docs/reference.md"));
   assert.match(readme, /if: \$\{\{ !cancelled\(\) && github\.ref == 'refs\/heads\/main'/);
   assert.match(readme, /needs: \$\{\{ toJSON\(needs\) \}\}/);
+});
+
+test("public pull requests never run repo-kit's untrusted checkout on a private runner", () => {
+  const text = read(path.join(workflowsDir, "check.yml"));
+  assert.match(text, /pull_request:/);
+  assert.match(text, /runs-on: ubuntu-latest/);
+  assert.doesNotMatch(text, /runs-on:.*self-hosted/);
+  assert.match(text, /persist-credentials: false/);
 });

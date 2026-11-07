@@ -10,8 +10,8 @@ on:
 permissions:
   contents: read
   packages: read
-# Jobs run on the self-hosted homelab runner (maxvyshniakov/proxmox
-# docs/ci-runner.md). Every main push runs ordinary verification.
+# Pull-request code runs only on an ephemeral GitHub-hosted runner.
+# Consumer reusable workflows keep their separately configured runner policy.
 concurrency:
   group: checks-${{ github.ref }}
   # A newer push to a pull request supersedes its older run; every main commit
@@ -19,12 +19,14 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   check:
-    runs-on: [self-hosted, homelab]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
       - uses: ./actions/setup-bun
       # Release validation remains in the explicit release-gate command.
       - run: bun run verify

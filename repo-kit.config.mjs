@@ -5,7 +5,7 @@ import path from "node:path";
 // The reusable workflows reference the composite action at the release tag,
 // and the README shows callers the same tag: a release moves both to the new
 // version (repo-kit check fails until they match).
-const VERSIONED_FILES = [".github/workflows", "README.md"];
+const VERSIONED_FILES = [".github/workflows", "README.md", "docs/reference.md"];
 
 export default {
   prePush: { releaseBranches: [] },

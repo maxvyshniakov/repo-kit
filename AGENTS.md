@@ -4,8 +4,7 @@ This repository owns `@maxvyshniakov/repo-kit`. It holds the shared verify, pre-
 plus the reusable workflows of the Sid-Kit, Data Grid, Inline Measure and Text Truncate repositories.
 [README.md](README.md) is the reference for its commands, config, workflows and release order.
 
-The repository and the package are private. Publishing publicly or making the repository public needs explicit
-authorization.
+Changing repository/package visibility or publishing to another registry requires explicit owner authorization.
 
 - Behavior changes need focused tests in `test/`. Consumer-visible changes go under `## Unreleased` in CHANGELOG.md.
 - The kit runs in every consumer's pre-push hook and CI. Keep it dependency-free.
