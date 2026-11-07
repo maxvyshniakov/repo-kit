@@ -4,6 +4,8 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+## 0.4.0 - 2026-11-07
+
 ### Added
 
 - `repo-kit-lane` exposes configured verification steps through Lanefather's plan/report contract, with real step logs, dependency outcomes, cancellation and committed-input checks.

@@ -170,7 +170,7 @@ and configure the runner and token permissions for your repository. Their existi
 ```yaml
 jobs:
   check:
-    uses: maxvyshniakov/repo-kit/.github/workflows/verify.yml@v0.3.1
+    uses: maxvyshniakov/repo-kit/.github/workflows/verify.yml@v0.4.0
     with:
       runner: '["ubuntu-latest"]'
     permissions:
