@@ -201,3 +201,14 @@ test("self hook sync retires only its unchanged old branch guard", () => {
   assert.equal(fs.readFileSync(guard,"utf8"),"custom guard");
  } finally {repository.cleanup();}
 });
+
+test('a configured lane carries named request fields and metadata into the execution lease', () => {
+  const command = leasedCommand(2, ['node', 'check.mjs'], { slotfather: true, cwd: '/fixture', env: {
+    REPO_KIT_SLOT_LABEL: 'lane-check-42', REPO_KIT_SLOT_PRIORITY: 'interactive', REPO_KIT_SLOT_TICKET: '42',
+    REPO_KIT_SLOT_META: JSON.stringify({ lane: 'feature-42', phase: 'check' }),
+  } });
+  assert.deepEqual(command, ['slotfather', 'run', '-n', '2', '--label', 'lane-check-42',
+    '--priority', 'interactive', '--ticket', '42', '--meta', 'lane=feature-42', '--meta', 'phase=check',
+    '--', 'node', 'check.mjs']);
+  assert.throws(() => leasedCommand(1, ['node'], { slotfather: true, env: { REPO_KIT_SLOT_META: '{broken' } }), /metadata/);
+});

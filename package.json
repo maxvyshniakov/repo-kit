@@ -5,7 +5,8 @@
   "description": "Shared release, publish and verification tooling for the maxvyshniakov library repositories.",
   "packageManager": "bun@1.4.4",
   "bin": {
-    "repo-kit": "src/cli.mjs"
+    "repo-kit": "src/cli.mjs",
+    "repo-kit-lane": "src/lanefather.mjs"
   },
   "exports": {
     ".": "./src/index.mjs",

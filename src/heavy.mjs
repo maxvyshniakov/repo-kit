@@ -35,7 +35,25 @@ export function slotWait(env = process.env) {
 export function leasedCommand(slots, command, { env = process.env, cwd = process.cwd(), slotfather = hasSlotfather(env) } = {}) {
   if (env.SLOTFATHER_LEASE || !slotfather) return command;
   const wait = slotWait(env);
-  return ["slotfather", "run", "-n", String(slots), "--label", path.basename(cwd), ...(wait ? ["--wait", String(wait)] : []), "--", ...command];
+  const context = [];
+  if (env.REPO_KIT_SLOT_PRIORITY) {
+    if (!["interactive", "normal", "batch"].includes(env.REPO_KIT_SLOT_PRIORITY)) throw new Error("invalid execution priority");
+    context.push("--priority", env.REPO_KIT_SLOT_PRIORITY);
+  }
+  if (env.REPO_KIT_SLOT_TICKET) context.push("--ticket", env.REPO_KIT_SLOT_TICKET);
+  if (env.REPO_KIT_SLOT_META) {
+    let metadata;
+    try { metadata = JSON.parse(env.REPO_KIT_SLOT_META); }
+    catch { throw new Error("invalid execution metadata JSON"); }
+    if (!metadata || Array.isArray(metadata) || typeof metadata !== "object") throw new Error("execution metadata must be an object");
+    for (const [key, value] of Object.entries(metadata)) {
+      if (["priority", "ticket"].includes(key) || typeof value !== "string") throw new Error("invalid execution metadata fields");
+      context.push("--meta", `${key}=${value}`);
+    }
+  }
+  if (env.REPO_KIT_SLOT_YIELDABLE === "1") context.push("--yieldable");
+  return ["slotfather", "run", "-n", String(slots), "--label", env.REPO_KIT_SLOT_LABEL || path.basename(cwd),
+    ...context, ...(wait ? ["--wait", String(wait)] : []), "--", ...command];
 }
 
 /**

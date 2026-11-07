@@ -201,9 +201,41 @@ commit and records its own passed result. A lane receipt or smoke is separate ev
 promotion/pre-push path run the full gate; running `bun run verify` manually immediately before it duplicates
 work. Projects sharing batch-gate evidence with a hook must provide that explicit contract.
 
-The plain `repo-kit verify` CLI does not implement Lanefather's plan/report protocol. Configuring only
-`checks.verify = "bun run verify"` is insufficient for `lanefather check`; a parallel-work project needs the
-adapter described by [Lanefather's check contract](https://github.com/maxvyshniakov/lanefather#the-check-contract).
+### Lane verification adapter
+
+`repo-kit-lane` implements [Lanefather's check contract](https://github.com/maxvyshniakov/lanefather#the-check-contract)
+from the consumer's existing `verify.steps` and optional `verify.browser`. It selects all declared checks for each
+change. Check IDs are the suite (`verify` or `browser`), a colon and the URL-encoded step name. Requested checks
+include their dependencies; when both suites run, browser work waits for normal verification. Names and commands
+come entirely from `repo-kit.config.mjs`.
+
+A parallel-work consumer tracks `.lanefather.toml` with its own project facts and:
+
+```toml
+[checks]
+verify = ".githooks/lane-check"
+slot_env = "REPO_KIT_SLOT"
+```
+
+Run `repo-kit hooks sync` and commit the managed `.githooks/lane-check`. It works in a fresh linked checkout:
+using the installed kit in this or the main checkout to lease a frozen dependency install, then executing the
+adapter from the target checkout's locked package. Install the main checkout's dependencies once before starting
+lanes. Keep the private registry credentials available as for pre-push; the entry also resolves `gh auth token`.
+
+The managed entry prepares dependencies under a one-slot lease even for planning. Direct `repo-kit-lane
+--changed --base REF --plan --json` reads configuration and Git without running checks. Execution uses Repo-Kit's
+existing scheduler, cancellation and timeouts, with the selected suites' configured lease budget; `--jobs` caps
+its available worker cores. `REPO_KIT_SLOT_LABEL`, `_PRIORITY`, `_TICKET`, `_META` and `_YIELDABLE` carry Lanefather's
+execution context. Reports and step logs live under the checkout's Git metadata, not in tracked source.
+
+A run prints `Verification report: <path>` to a version-1 JSON report with the original commit/tree, each check's
+status, log and blocking dependencies. Cancellation, failed setup or changed committed inputs cannot yield green
+verification evidence. Lanefather remains responsible for receipts, review, landing and cleanup. The adapter
+creates neither a verified-tree stamp nor a pre-push/release attestation. Those existing gates keep their own
+contracts and still run when publishing.
+
+Adding this adapter does not reconcile a previously published lane that never went through `land`. Keep that
+historical completion separate; changing a published task's metadata does not manufacture its missing evidence.
 
 Repo-kit's own repository has no lane adapter and uses one active `main` branch. Its task-worktree process is in
 [orchestration](docs/agents/orchestration.md); the explicit-SHA push, pre-push gate and CI procedure is in

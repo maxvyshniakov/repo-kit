@@ -485,8 +485,8 @@ function signalStep(pid, processes, signal) {
   }
 }
 
-function startProcess(step, { root, running, mark, processes = () => [] }) {
-  const env = { ...process.env, [STEP_MARK]: mark };
+function startProcess(step, { root, running, mark, processes = () => [], onLine = () => {}, environment = process.env }) {
+  const env = { ...environment, [STEP_MARK]: mark };
   if (step.workers) env.VITEST_MAX_WORKERS = env.REPO_KIT_WORKERS = String(step.workers);
   // Each step gets its own process group, so stopping it reaches its workers too.
   const child = spawn("bun", step.command, { cwd: root, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
@@ -494,6 +494,7 @@ function startProcess(step, { root, running, mark, processes = () => [] }) {
   const tail = [];
   const write = text => {
     process.stdout.write(`[${step.name}] ${text}\n`);
+    onLine(step, text);
     tail.push(text);
     if (tail.length > FAILURE_TAIL_LINES) tail.shift();
   };
@@ -550,19 +551,20 @@ function startProcess(step, { root, running, mark, processes = () => [] }) {
       write(String(error.stack));
       finish(false);
     });
-    child.on("close", code => finish(code === 0 && !handle.timedOut));
+    // A stopped command may handle SIGTERM and exit zero without finishing its work.
+    child.on("close", code => finish(code === 0 && !handle.timedOut && !handle.stopped));
   });
   running.add(handle);
   return handle;
 }
 
 /** Runs the gate in `root`; sets process.exitCode rather than exiting, so piped output drains. */
-export async function runVerify(config, { release = false, browser = false } = {}) {
-  const cores = verifyCores();
+export async function runVerify(config, { release = false, browser = false, steps: declaredSteps, onLine, maxCores = Infinity, env = process.env } = {}) {
+  const cores = Math.min(verifyCores(), maxCores);
   const memory = verifyMemory();
   const { workerMemory } = config.verify;
   const workers = unitTestWorkers(cores, memory, workerMemory);
-  const steps = sizeSteps(verifySteps(config, { release, browser }), { workers, workerMemory });
+  const steps = sizeSteps(declaredSteps ?? verifySteps(config, { release, browser }), { workers, workerMemory });
   const running = new Set();
   // A signal stops every running step's process group and waits for them; a
   // second one kills them. One Ctrl-C under `bun run verify` arrives twice, from
@@ -594,7 +596,7 @@ export async function runVerify(config, { release = false, browser = false } = {
   const reaper = startReaper();
   const results = await runSteps(steps, step => {
     console.log(`  start ${step.name} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
-    const handle = startProcess(step, { root: config.root, running, mark: `${RUN_MARK}.${steps.indexOf(step)}`, processes: () => memorySamples.processes(step.name) });
+    const handle = startProcess(step, { root: config.root, running, mark: `${RUN_MARK}.${steps.indexOf(step)}`, processes: () => memorySamples.processes(step.name), onLine, environment: env });
     tails.set(step.name, handle.tail);
     handles.set(step.name, handle);
     if (handle.pid) {
@@ -631,4 +633,5 @@ export async function runVerify(config, { release = false, browser = false } = {
   // Not process.exit: stdout to a pipe (CI, the pre-push hook) is written
   // asynchronously, and exiting at once would cut off the steps' output.
   process.exitCode = interrupt.signal.aborted ? 128 + os.constants.signals[interrupt.signal.reason] : failed ? 1 : 0;
+  return { exit: process.exitCode, results, interrupted: interrupt.signal.reason ?? null };
 }

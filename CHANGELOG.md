@@ -6,6 +6,10 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ### Added
 
+- `repo-kit-lane` exposes configured verification steps through Lanefather's plan/report contract, with real step logs, dependency outcomes, cancellation and committed-input checks.
+- Consumers with `.lanefather.toml` receive a managed `lane-check` entry from `hooks sync`; it prepares the target checkout's frozen dependencies before running its locked adapter.
+- Lane verification leases carry configured labels, named priority/ticket and metadata through the `REPO_KIT_SLOT_*` execution context.
+
 - `prePush.releaseBranches` selects branches requiring release validation; the default remains `main` for consumers.
 
 ### Changed

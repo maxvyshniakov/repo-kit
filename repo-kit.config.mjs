@@ -29,6 +29,9 @@ export default {
         const result = run("node_modules/.bin/repo-kit", ["help"], { cwd: consumerDir });
         if (result.status === 0 && result.stdout.includes("Usage: repo-kit <command>")) ok("node_modules/.bin/repo-kit runs");
         else fail(`node_modules/.bin/repo-kit help exited ${result.status}:\n${result.stdout}${result.stderr}`);
+        const lane = run("node_modules/.bin/repo-kit-lane", ["--help"], { cwd: consumerDir });
+        if (lane.status === 0 && lane.stdout.includes("Usage: repo-kit-lane")) ok("node_modules/.bin/repo-kit-lane runs");
+        else fail(`node_modules/.bin/repo-kit-lane --help exited ${lane.status}:\n${lane.stdout}${lane.stderr}`);
       },
     ],
   },
