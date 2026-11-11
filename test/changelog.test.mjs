@@ -276,3 +276,32 @@ for (const [kind, files, versionSource] of [
     }
   });
 }
+
+test("the pyproject parser skips multi-line strings and arrays, and refuses a second [project] version", () => {
+  const tricky = `[project]
+name = "example"
+description = """
+An example.
+version = "9.9.9"
+[not.a.table]
+"""
+readme = \'\'\'
+version = '8.8.8'
+\'\'\'
+dependencies = [
+  [
+    "nested",
+  ],
+  "x",
+]
+version = "0.2.0"
+
+[tool.other]
+version = "7.7.7"
+`;
+  assert.equal(pyprojectProject(tricky).version, "0.2.0");
+  assert.equal(pyprojectProject(tricky).versionLine, 16);
+  assert.equal(pyprojectProject(setPyprojectVersion(tricky, "0.3.0")).version, "0.3.0");
+  assert.match(setPyprojectVersion(tricky, "0.3.0"), /version = "9\.9\.9"\n\[not\.a\.table\]/);
+  assert.throws(() => pyprojectProject('[project]\nversion = "1.0.0"\nversion = "1.0.1"\n'), /\[project\] sets version twice \(lines 2 and 3\)/);
+});

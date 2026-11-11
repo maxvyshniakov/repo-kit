@@ -85,7 +85,9 @@ exec node "$root/node_modules/@maxvyshniakov/repo-kit/src/lanefather.mjs" "$@"
 
 // The changelog-entry guard (changelog-entries.mjs). Besides the installed kit
 // it finds a `repo-kit` on PATH, for a repository without node_modules (a
-// Python package, say).
+// Python package, say). It fails open: when it cannot run the kit (no kit, no
+// node, a kit without commit-msg) it warns and lets the commit through, and
+// CI's check-changelog-entries remains the backstop.
 export function commitMsgShim({ self = false } = {}) {
   const locate = self
     ? 'cli="$root/src/cli.mjs"'
@@ -94,19 +96,23 @@ if [ ! -f "$cli" ]; then
   common=$(cd "$root" && cd "$(git rev-parse --git-common-dir)/.." && pwd)
   cli="$common/node_modules/@maxvyshniakov/repo-kit/src/cli.mjs"
 fi
-if [ ! -f "$cli" ] && command -v repo-kit >/dev/null 2>&1; then
-  exec repo-kit commit-msg "$@"
+if [ ! -f "$cli" ]; then
+  cli=$(command -v repo-kit 2>/dev/null) || cli=""
 fi`;
   return `#!/bin/sh
 # Managed by @maxvyshniakov/repo-kit (repo-kit hooks sync); do not edit.
 # Checks that a change to changelog.paths adds a "## Unreleased" line or carries
 # the trailer "Changelog: none (<reason>)"; skip once with git commit --no-verify.
+# Without a kit to run it warns and lets the commit through.
+skip() {
+  echo "commit-msg: warning: $1. The changelog-entry check did not run; CI's check-changelog-entries still does." >&2
+  exit 0
+}
 root=$(git rev-parse --show-toplevel)
 ${locate}
-if [ ! -f "$cli" ]; then
-  echo "commit-msg: repo-kit is not installed; run bun install or put repo-kit on PATH. Nothing was committed." >&2
-  exit 1
-fi
+[ -n "$cli" ] && [ -f "$cli" ] || skip "repo-kit is not installed; run bun install, or put repo-kit on PATH"
+command -v node >/dev/null 2>&1 || skip "node is not on PATH; install Node.js 22 or newer, or add it to the PATH Git hooks run with"
+node "$cli" help 2>/dev/null | grep -q "commit-msg <message file>" || skip "this repo-kit has no commit-msg command; install repo-kit 0.5.0 or newer"
 exec node "$cli" commit-msg "$@"
 `;
 }

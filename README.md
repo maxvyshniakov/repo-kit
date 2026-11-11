@@ -153,12 +153,14 @@ export default {
 };
 ```
 
-Each commit touching those paths then adds or changes a line under `## Unreleased` in that package's `CHANGELOG.md`,
-or ends its message with the trailer `Changelog: none`, optionally with a reason: `Changelog: none (tests only)`.
+Each commit touching those paths then adds, changes or removes a line under `## Unreleased` in that package's
+`CHANGELOG.md`, or ends its message with the trailer `Changelog: none`, optionally with a reason:
+`Changelog: none (tests only)`. One such trailer covers every package the commit changes.
 Merge commits and release commits (the version cut `repo-kit release` writes) are exempt. Without `changelog.paths`
 nothing is checked.
 
-`repo-kit hooks sync` then also writes a managed `commit-msg` hook, which checks the commit being made.
+`repo-kit hooks sync` then also writes a managed `commit-msg` hook, which checks the commit being made; when it
+cannot run the kit it warns and lets the commit through.
 `repo-kit check-changelog-entries origin/main..HEAD` checks every commit of a range, for a verify step or CI.
 The check reads only Git: the same commits give the same answer everywhere.
 

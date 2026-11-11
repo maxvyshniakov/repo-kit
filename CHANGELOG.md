@@ -7,7 +7,7 @@ Versions and release rules: [README.md](README.md#versioning).
 ### Added
 
 - `changelog.versionSource: "pyproject.toml"` reads and releases a Python package's version from `pyproject.toml`'s `[project]` table; a repository without a root `package.json` uses it by default. `check-changelogs` compares it with the newest release and `release` sets it.
-- The changelog-entry guard: with `changelog.paths` set, a commit changing those paths must add or change a line under `## Unreleased` in its package's `CHANGELOG.md`, or carry the trailer `Changelog: none (<reason>)`; merges and release cuts are exempt. `repo-kit check-changelog-entries <base>..<head>` checks a range, and `hooks sync` writes a managed `commit-msg` hook that checks each commit.
+- The changelog-entry guard: with `changelog.paths` set, a commit changing those paths must add, change or remove a line under `## Unreleased` in its package's `CHANGELOG.md`, or carry the trailer `Changelog: none (<reason>)`, which covers the whole commit; merges and release cuts are exempt. `repo-kit check-changelog-entries <base>..<head>` checks a range, and `hooks sync` writes a managed `commit-msg` hook that checks each commit, skips `fixup!`/`squash!` commits, and warns instead of blocking when it cannot run the kit.
 - `hooks.managed` limits the managed hooks `hooks sync` writes and `hooks check` expects, for a repository that wants only some of them.
 - `verify.yml` takes `fetch-depth`, for a verify step that checks a range against its base branch.
 

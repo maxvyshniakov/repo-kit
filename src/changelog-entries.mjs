@@ -1,7 +1,8 @@
 // The changelog-entry guard: a commit that changes a package's shipped paths
-// (changelog.paths in repo-kit.config.mjs) adds or changes a line under
+// (changelog.paths in repo-kit.config.mjs) adds, changes or removes a line under
 // "## Unreleased" in that package's CHANGELOG.md, or carries the trailer
 // "Changelog: none", optionally with a reason: "Changelog: none (tests only)".
+// One such trailer covers the whole commit, every package it changes.
 // Merge commits, and commits that cut the package's release (a new newest
 // changelog release that the manifest's version names, as `repo-kit release`
 // writes), are exempt.
@@ -43,10 +44,16 @@ export function globToRegExp(glob) {
       }
     } else if (char === "*") source += "[^/]*";
     else if (char === "?") source += "[^/]";
-    else if (char === "{") {
+    else if (char === "[" || char === "]") {
+      throw new Error(`changelog.paths: "${glob}": character classes ([...]) are not supported; use {a,b}`);
+    } else if (char === "{") {
       const end = pattern.indexOf("}", index);
-      if (end === -1) throw new Error(`unclosed "{" in ${glob}`);
-      source += `(?:${pattern.slice(index + 1, end).split(",").map(escape).join("|")})`;
+      if (end === -1) throw new Error(`changelog.paths: "${glob}": unclosed "{"`);
+      const body = pattern.slice(index + 1, end);
+      if (body.includes("{")) throw new Error(`changelog.paths: "${glob}": nested {} is not supported`);
+      if (body.includes("**")) throw new Error(`changelog.paths: "${glob}": "**" inside {} is not supported; list the globs separately`);
+      // Alternatives match literally, or with * and ? within a segment.
+      source += `(?:${body.split(",").map(part => escape(part).replaceAll("\\*", "[^/]*").replaceAll("\\?", "[^/]")).join("|")})`;
       index = end;
     } else source += escape(char);
   }
@@ -92,13 +99,31 @@ export function compileRules(paths, packages) {
   } else {
     throw new Error("changelog.paths: expected an array of globs or { <package directory>: [globs] }");
   }
-  return [...byPackage].map(([pkg, globs]) => ({
-    pkg,
-    changelog: path.posix.join(pkg.path, "CHANGELOG.md"),
-    manifest: path.posix.join(pkg.path, pkg.manifestFile ?? "package.json"),
-    include: globs.filter(glob => !glob.startsWith("!")).map(globToRegExp),
-    exclude: globs.filter(glob => glob.startsWith("!")).map(glob => globToRegExp(glob.slice(1))),
-  }));
+  return [...byPackage].map(([pkg, globs]) => {
+    const includes = globs.filter(glob => !glob.startsWith("!"));
+    return {
+      pkg,
+      changelog: path.posix.join(pkg.path, "CHANGELOG.md"),
+      manifest: path.posix.join(pkg.path, pkg.manifestFile ?? "package.json"),
+      includes,
+      include: includes.map(globToRegExp),
+      exclude: globs.filter(glob => glob.startsWith("!")).map(glob => globToRegExp(glob.slice(1))),
+    };
+  });
+}
+
+/** A warning for each include glob that matches none of `tracked`, with "dir/**" suggested for a bare directory. */
+export function unmatchedGlobWarnings(rules, tracked) {
+  const warnings = [];
+  for (const rule of rules) {
+    for (const [index, glob] of rule.includes.entries()) {
+      if (tracked.some(file => rule.include[index].test(file))) continue;
+      const plain = glob.replace(/^\.\//, "");
+      const directory = !/[*?{]/.test(plain) && tracked.some(file => file.startsWith(`${plain}/`));
+      warnings.push(`changelog.paths "${glob}" matches no tracked file${directory ? `; for everything below a directory write "${plain}/**"` : ""}`);
+    }
+  }
+  return warnings;
 }
 
 export function shippedFiles(files, rule) {
@@ -109,16 +134,16 @@ const entryLines = text => (text === undefined ? [] : parseChangelog(text).unrel
   .map(line => line.trimEnd())
   .filter(line => line.trim() && !/^#{1,6} /.test(line));
 
-/** Whether `after` has a line under "## Unreleased" that `before` did not: an added or changed entry. */
+/**
+ * Whether the lines under "## Unreleased" differ, ignoring order, blank lines and
+ * headings: an entry added, changed or removed (a revert takes its entry back out).
+ */
 export function unreleasedChanged(before, after) {
+  if (after === undefined) return false; // a deleted changelog is no entry
   const counts = new Map();
   for (const line of entryLines(before)) counts.set(line, (counts.get(line) ?? 0) + 1);
-  for (const line of entryLines(after)) {
-    const count = counts.get(line) ?? 0;
-    if (!count) return true;
-    counts.set(line, count - 1);
-  }
-  return false;
+  for (const line of entryLines(after)) counts.set(line, (counts.get(line) ?? 0) - 1);
+  return [...counts.values()].some(count => count !== 0);
 }
 
 /** Whether the change cuts a release: a newer newest release, the version the manifest now records. */
@@ -233,6 +258,8 @@ export function runCheckChangelogEntries(config, args) {
     console.log("changelog entries: changelog.paths is not configured; nothing to check");
     return 0;
   }
+  const tracked = nulList(git(config.root, ["ls-files", "-z"]).stdout);
+  for (const warning of unmatchedGlobWarnings(rules, tracked)) console.error(`changelog entries: warning: ${warning}`);
   const { failures, checked, merges } = rangeIssues(config.root, range, rules);
   for (const { sha, subject, issues } of failures) {
     console.error(`FAIL ${sha.slice(0, 10)} ${subject}`);
@@ -253,7 +280,22 @@ export function runCheckChangelogEntries(config, args) {
  * that hides --amend is not seen; the commit is then checked as a new one.
  */
 export function amending(parentArgs = parentCommandLine()) {
-  return parentArgs.split(/\s+/).includes("--amend");
+  const words = parentArgs.trim().split(/\s+/);
+  // "-m --amend" is a message, not the option.
+  return words.some((word, index) => word === "--amend" && !TAKES_VALUE.has(words[index - 1]));
+}
+
+const TAKES_VALUE = new Set(["-m", "--message", "-F", "--file", "-c", "-C", "--reuse-message", "--reedit-message",
+  "--author", "--date", "--trailer", "-t", "--template", "--cleanup", "--fixup", "--squash"]);
+
+const SCISSORS = /^. -+ >8 -+$/m;
+
+/** The message as Git will record it: up to a scissors line, comments and surplus blank lines stripped. */
+export function cleanMessage(message, { cwd } = {}) {
+  const cut = SCISSORS.exec(message);
+  const text = cut ? message.slice(0, cut.index) : message;
+  const result = spawnSync("git", ["stripspace", "--strip-comments"], { cwd, input: text, encoding: "utf8" });
+  return result.status === 0 ? result.stdout : text;
 }
 
 function parentCommandLine() {
@@ -261,24 +303,41 @@ function parentCommandLine() {
   return result.status === 0 ? result.stdout : "";
 }
 
-/** Problems with the commit being made: the index against HEAD (HEAD's parent when amending). */
+/**
+ * Problems with the commit being made: the index against HEAD, or against HEAD's
+ * parent when amending. An amend the command line does not show (an alias, a
+ * hook manager, a GUI) usually keeps HEAD's message: a commit with HEAD's message
+ * that fails against HEAD is checked against HEAD's parent too, so the entry the
+ * amended commit already has counts. fixup! and squash! commits pass: they are
+ * folded into another commit, and the range check sees the result.
+ */
 export function stagedIssues(root, message, rules, { amend = amending() } = {}) {
   const head = git(root, ["rev-parse", "--verify", "-q", "HEAD"], { allowFailure: true }).stdout.trim() || undefined;
   const mergeHead = git(root, ["rev-parse", "--git-path", "MERGE_HEAD"]).stdout.trim();
   if (fs.existsSync(path.resolve(root, mergeHead))) return [];
-  let base = head;
-  if (amend && head) {
-    const parents = git(root, ["rev-list", "--parents", "-n", "1", head]).stdout.trim().split(" ").slice(1);
-    if (parents.length > 1) return []; // amending a merge
-    base = parents[0];
-  }
-  const emptyTree = git(root, ["hash-object", "-t", "tree", "/dev/null"]).stdout.trim();
-  const files = nulList(git(root, ["diff", "--cached", "-z", "--name-only", "--no-renames", base ?? emptyTree]).stdout);
-  const after = file => {
-    const result = git(root, ["cat-file", "blob", `:${file}`], { allowFailure: true });
-    return result.status === 0 ? result.stdout : undefined;
+  const cleaned = cleanMessage(message, { cwd: root });
+  if (/^(?:fixup|squash|amend)! /.test(cleaned)) return [];
+  const headParents = () => git(root, ["rev-list", "--parents", "-n", "1", head]).stdout.trim().split(" ").slice(1);
+  const against = base => {
+    const emptyTree = git(root, ["hash-object", "-t", "tree", "/dev/null"]).stdout.trim();
+    const files = nulList(git(root, ["diff", "--cached", "-z", "--name-only", "--no-renames", base ?? emptyTree]).stdout);
+    const after = file => {
+      const result = git(root, ["cat-file", "blob", `:${file}`], { allowFailure: true });
+      return result.status === 0 ? result.stdout : undefined;
+    };
+    return changeIssues({ files, before: reader(root, base), after, message: cleaned }, rules, { cwd: root });
   };
-  return changeIssues({ files, before: reader(root, base), after, message }, rules, { cwd: root });
+  if (amend && head) {
+    const parents = headParents();
+    return parents.length > 1 ? [] : against(parents[0]); // amending a merge is exempt
+  }
+  const issues = against(head);
+  if (!issues.length || !head) return issues;
+  const headMessage = cleanMessage(git(root, ["log", "-1", "--format=%B", head]).stdout, { cwd: root });
+  if (headMessage.trim() !== cleaned.trim()) return issues;
+  const parents = headParents();
+  if (parents.length > 1 || !against(parents[0]).length) return [];
+  return issues;
 }
 
 export function runCommitMsg(config, [messageFile] = []) {
@@ -292,6 +351,7 @@ export function runCommitMsg(config, [messageFile] = []) {
   if (!issues.length) return 0;
   console.error("commit-msg: changelog entry missing:");
   for (const issue of issues) console.error(`  ${issue}`);
-  console.error(`commit-msg: ${HINT} Nothing was committed; skip once with git commit --no-verify.`);
+  console.error(`commit-msg: ${HINT} An amend the hook could not see as one is checked as a new commit; add the trailer if the amended commit's entry covers it.`);
+  console.error("commit-msg: Nothing was committed; skip once with git commit --no-verify.");
   return 1;
 }

@@ -174,7 +174,7 @@ Re-measure after a change that adds tests or stories; a peak above its declared 
 ## Changelog entries
 
 A package's changelog misses changes when nothing asks for an entry. The guard asks, deterministically, from Git alone:
-a commit that changes a package's shipped paths adds or changes a line under `## Unreleased` in that package's
+a commit that changes a package's shipped paths adds, changes or removes a line under `## Unreleased` in that package's
 `CHANGELOG.md`, or ends its message with the trailer `Changelog: none` and an optional reason.
 
 ```js
@@ -190,28 +190,38 @@ export default {
 ```
 
 Globs are repository-relative: `*` and `?` stay within a path segment, `**` spans segments, `{a,b}` is either, a
-trailing `/` means everything below a directory, and a leading `!` excludes what the others include. With no
-`changelog.paths` the guard is off.
+trailing `/` means everything below a directory, and a leading `!` excludes what the others include. Character
+classes (`[...]`), nested braces and `**` inside braces are configuration errors. A bare directory such as `src`
+matches only a file of that name: write `src/**`. `check-changelog-entries` warns about every include glob that
+matches no tracked file. With no `changelog.paths` the guard is off.
 
 | A commit | Result |
 |---|---|
 | changes no shipped path | passes |
-| changes one and adds or changes a non-blank, non-heading line under `## Unreleased` of that package's changelog | passes |
+| changes one and adds, changes or removes a non-blank, non-heading line under `## Unreleased` of that package's changelog (a revert takes its entry back out) | passes |
 | changes one and carries `Changelog: none` or `Changelog: none (<reason>)` as a trailer | passes |
 | is a merge commit (more than one parent) | exempt |
 | cuts that package's release: its newest changelog release is newer and is the version the manifest now records, as after `repo-kit release` | exempt |
-| anything else, including only reordering, removing or editing older releases' lines | fails, naming the files and the changelog |
+| anything else, including only reordering lines or editing older releases' lines | fails, naming the files and the changelog |
 
 The trailer is read as `git interpret-trailers` parses trailers: it belongs to the message's last paragraph, beside
 `Co-Authored-By:` for example, not on the subject line. A `Changelog:` trailer with any other value fails and says so.
+One `Changelog: none` covers the whole commit: in a repository with several packages it exempts every package the
+commit changes. Split a commit that changes one package visibly and another invisibly, so the trailer cannot
+cover a missing entry.
 
 ### Where it runs
 
 - **commit-msg hook.** `repo-kit hooks sync` writes `.githooks/commit-msg` when `changelog.paths` is set; `repo-kit hooks
-  install` (the `prepare` script) activates `.githooks`. It checks the index against `HEAD` (against `HEAD`'s parent for
-  `git commit --amend`, seen on the `git` command line; an alias that hides `--amend` is checked as a new commit) and
-  skips merges in progress. It runs the installed kit, the main checkout's in a linked worktree, or a `repo-kit` on
-  `PATH` for a repository without `node_modules`. `git commit --no-verify` skips it once.
+  install` (the `prepare` script) activates `.githooks`. It checks the index against `HEAD`, and against `HEAD`'s
+  parent for `git commit --amend`, read from the `git` command line. An amend that line does not show (an alias, a
+  hook manager, a GUI) usually keeps `HEAD`'s message: a commit with `HEAD`'s message that fails against `HEAD` is
+  checked against its parent too, so the amended commit's entry counts. It skips merges in progress and `fixup!`,
+  `squash!` and `amend!` commits, which the range check sees after they are folded in. It runs the installed kit,
+  the main checkout's in a linked worktree, or a `repo-kit` on `PATH` for a repository without `node_modules`. When
+  it cannot run the kit (none installed, no `node` on the `PATH` Git hooks get, a kit without `commit-msg`) it prints
+  one warning naming the fix and lets the commit through: the range check in verify or CI is the backstop.
+  `git commit --no-verify` skips it once.
 - **verify step.** `{ name: "changelog entries", command: ["run", "check:changelog-entries"] }` with
   `"check:changelog-entries": "repo-kit check-changelog-entries origin/main..HEAD"` (the branch commits integrate into).
   The base must be in the checkout: in CI call `verify.yml` with `fetch-depth: 0`. A range Git cannot resolve fails.
@@ -228,7 +238,8 @@ A repository's agent instructions can link here and carry this paragraph:
 > A commit that changes a shipped path (`changelog.paths` in `repo-kit.config.mjs`) adds or changes a line under
 > `## Unreleased` in that package's `CHANGELOG.md`, in the same commit. When the change is invisible to the package's
 > users (tests, internal refactoring, tooling), end the message with the trailer `Changelog: none (<reason>)` instead.
-> The commit-msg hook and `repo-kit check-changelog-entries` enforce it; merges and release cuts are exempt.
+> The commit-msg hook and `repo-kit check-changelog-entries` enforce it; merges and release cuts are exempt, and one
+> trailer covers every package the commit changes.
 
 ## Working with Lanefather
 

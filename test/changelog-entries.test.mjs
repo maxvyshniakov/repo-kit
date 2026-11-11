@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  amending,
   changelogTrailers,
   compileRules,
   cutsRelease,
@@ -18,7 +19,7 @@ import {
 import { withDefaults } from "../src/config.mjs";
 import { hookIssues, managedHooks, syncHooks } from "../src/hooks.mjs";
 import { runRelease } from "../src/release.mjs";
-import { changelog, kitRoot, pyprojectFiles, rootPackageFiles, tempRepository, workspaceFiles } from "./fixtures.mjs";
+import { changelog, isolatedGitEnv, kitRoot, pyprojectFiles, rootPackageFiles, tempRepository, workspaceFiles } from "./fixtures.mjs";
 
 const quiet = fn => {
   const { log, error } = console;
@@ -82,14 +83,14 @@ test("paths belong to the only package, to the package they lie in, or to the pa
   assert.deepEqual(compileRules(undefined, [sidKit]), []);
 });
 
-test("an Unreleased line counts when it is new or changed, not when it moved, is blank or is a heading", () => {
+test("an Unreleased line counts when it is new, changed or removed, not when it moved, is blank or is a heading", () => {
   const withEntry = changelog.replace("- Fixed a thing.", "- Fixed a thing.\n- Fixed another.");
   assert.equal(unreleasedChanged(changelog, withEntry), true);
   assert.equal(unreleasedChanged(changelog, changelog.replace("- Fixed a thing.", "- Fixed a thing, properly.")), true);
   assert.equal(unreleasedChanged(undefined, changelog), true);
   assert.equal(unreleasedChanged(changelog, changelog.replace("### Fixed\n", "### Fixed\n\n### Added\n")), false);
   assert.equal(unreleasedChanged(changelog, changelog.replace("- First release.", "- First release, reworded.")), false, "an old release's line");
-  assert.equal(unreleasedChanged(withEntry, changelog), false, "a removed line");
+  assert.equal(unreleasedChanged(withEntry, changelog), true, "a removed line: a revert takes its entry back out");
   assert.equal(unreleasedChanged(changelog, undefined), false);
 });
 
@@ -290,13 +291,151 @@ test("in a repository without node_modules the commit-msg hook runs the repo-kit
     fs.writeFileSync(path.join(python.root, "example/__init__.py"), "VALUE = 1\n");
     python.git("add", "-A");
     const commit = env => spawnSync("git", ["commit", "--quiet", "-m", "Value"], { cwd: python.root, env, encoding: "utf8" });
+    // Without a kit to run, the hook warns and lets the commit through; CI's range check still runs.
     const missing = commit({ ...python.env, PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin` });
-    assert.equal(missing.status, 1);
-    assert.match(missing.stderr, /repo-kit is not installed; run bun install or put repo-kit on PATH/);
+    assert.equal(missing.status, 0, missing.stderr);
+    assert.match(missing.stderr, /commit-msg: warning: repo-kit is not installed; run bun install, or put repo-kit on PATH\. The changelog-entry check did not run/);
+    python.git("reset", "--quiet", "--soft", "HEAD~1");
     const refused = commit({ ...python.env, PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin` });
     assert.equal(refused.status, 1, refused.stderr);
     assert.match(refused.stderr, /example\/__init__.py changed example without a line under "## Unreleased" in CHANGELOG.md/);
   } finally {
     python.cleanup();
+  }
+});
+
+/** A guarded root package with the commit-msg hook active and the kit linked into node_modules. */
+function hooked(kit = kitRoot) {
+  const repo = guarded(rootPackageFiles({ "repo-kit.config.mjs": configText(PATHS, ', hooks: { managed: ["commit-msg"] }'), "src/index.mjs": "export {};\n" }));
+  quiet(() => syncHooks(repo.root, { ...repo.config, hooks: { managed: ["commit-msg"] } }));
+  fs.mkdirSync(path.join(repo.root, "node_modules/@maxvyshniakov"), { recursive: true });
+  fs.symlinkSync(kit, path.join(repo.root, "node_modules/@maxvyshniakov/repo-kit"));
+  fs.writeFileSync(path.join(repo.root, ".gitignore"), "node_modules/\n.bin/\n");
+  repo.git("add", "-A");
+  repo.git("commit", "--quiet", "--no-verify", "-m", "Hooks");
+  repo.git("config", "core.hooksPath", ".githooks");
+  const write = (relative, contents) => fs.writeFileSync(path.join(repo.root, relative), contents);
+  const run = (args, env = repo.env) => spawnSync("git", args, { cwd: repo.root, env, encoding: "utf8" });
+  return { ...repo, write, run, commit: (...args) => run(["commit", "--quiet", ...args]) };
+}
+
+test("the commit-msg hook fails open, with a warning, when node is missing or the kit has no commit-msg", () => {
+  const repo = hooked();
+  const old = tempRepository({ "src/cli.mjs": "console.log('Usage: repo-kit <command>\\n  verify');\nprocess.exitCode = 1;\n" });
+  const oldRepo = hooked(old.root);
+  try {
+    // A GUI client's PATH without node: only git and the system tools.
+    const bin = path.join(repo.root, ".bin");
+    fs.mkdirSync(bin);
+    const gitPath = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+    fs.symlinkSync(gitPath, path.join(bin, "git"));
+    repo.write("src/index.mjs", "export const a = 1;\n");
+    const noNode = repo.run(["commit", "--quiet", "-a", "-m", "Add a"], { ...repo.env, PATH: `${bin}:/usr/bin:/bin` });
+    assert.equal(noNode.status, 0, noNode.stderr);
+    assert.match(noNode.stderr, /commit-msg: warning: node is not on PATH; install Node\.js 22 or newer, or add it to the PATH Git hooks run with\./);
+
+    oldRepo.write("src/index.mjs", "export const a = 1;\n");
+    const outdated = oldRepo.commit("-a", "-m", "Add a");
+    assert.equal(outdated.status, 0, outdated.stderr);
+    assert.match(outdated.stderr, /commit-msg: warning: this repo-kit has no commit-msg command; install repo-kit 0\.5\.0 or newer\./);
+  } finally {
+    repo.cleanup();
+    oldRepo.cleanup();
+    old.cleanup();
+  }
+});
+
+test("--amend is read from the command line, not from a message that says it", () => {
+  assert.equal(amending("git commit --amend --no-edit"), true);
+  assert.equal(amending("git -C /x commit -a --amend"), true);
+  assert.equal(amending("git commit -m --amend"), false);
+  assert.equal(amending("git commit --message --amend"), false);
+  assert.equal(amending("git commit -a -m Fix"), false);
+});
+
+test("an amend the command line hides is recognised by its unchanged message, and the failure says so", () => {
+  const repo = hooked();
+  try {
+    repo.git("config", "alias.fix", "commit --amend --no-edit");
+    repo.write("src/index.mjs", "export const b = 2;\n");
+    repo.write("CHANGELOG.md", entry(path.join(repo.root, "CHANGELOG.md")));
+    assert.equal(repo.commit("-a", "-m", "Add b").status, 0);
+    repo.write("src/index.mjs", "export const b = 3;\n");
+    const aliased = repo.run(["fix", "--quiet", "-a"]);
+    assert.equal(aliased.status, 0, aliased.stderr);
+
+    repo.write("src/index.mjs", "export const c = 4;\n");
+    const refused = repo.commit("-a", "-m", "Add c");
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /An amend the hook could not see as one is checked as a new commit; add the trailer if the amended commit's entry covers it\./);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("fixup! and squash! commits pass the hook; the range check still covers them", () => {
+  const repo = hooked();
+  try {
+    repo.write("src/index.mjs", "export const b = 2;\n");
+    repo.write("CHANGELOG.md", entry(path.join(repo.root, "CHANGELOG.md")));
+    assert.equal(repo.commit("-a", "-m", "Add b").status, 0);
+    for (const kind of ["fixup", "squash"]) {
+      repo.write("src/index.mjs", `export const b = "${kind}";\n`);
+      const result = repo.commit("-a", `--${kind}=HEAD`, ...(kind === "squash" ? ["--no-edit"] : []));
+      assert.equal(result.status, 0, `${kind}: ${result.stderr}`);
+    }
+    assert.match(repo.check("HEAD~2").output, /FAIL [0-9a-f]{10} fixup! Add b/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("a revert passes: removing an Unreleased line is an entry change", () => {
+  const repo = guarded();
+  try {
+    repo.commit({ "src/index.mjs": "export const b = 2;\n", "CHANGELOG.md": entry }, "Add b");
+    repo.git("revert", "--no-edit", "HEAD");
+    assert.equal(repo.check().result, 0, repo.check().output);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("character classes and ** inside braces are configuration errors", () => {
+  assert.throws(() => globToRegExp("src/[ab].ts"), /changelog\.paths: "src\/\[ab\]\.ts": character classes \(\[\.\.\.\]\) are not supported/);
+  assert.throws(() => globToRegExp("{src/**,lib}/x"), /changelog\.paths: "\{src\/\*\*,lib\}\/x": "\*\*" inside \{\} is not supported/);
+  assert.throws(() => globToRegExp("{a,{b,c}}"), /nested \{\} is not supported/);
+});
+
+test("check-changelog-entries warns about a glob that matches no tracked file", () => {
+  const repo = guarded(rootPackageFiles({ "repo-kit.config.mjs": configText(["src", "lib/**"]), "src/index.mjs": "export {};\n" }), ["src", "lib/**"]);
+  try {
+    repo.commit({ "README.md": "# Example\n" }, "Readme");
+    const { result, output } = repo.check();
+    assert.equal(result, 0);
+    assert.match(output, /changelog entries: warning: changelog\.paths "src" matches no tracked file; for everything below a directory write "src\/\*\*"/);
+    assert.match(output, /changelog entries: warning: changelog\.paths "lib\/\*\*" matches no tracked file/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("one Changelog: none trailer exempts every package a commit changes", () => {
+  const files = workspaceFiles({ "repo-kit.config.mjs": configText(["packages/a/src/**", "packages/b/src/**"]) });
+  delete files["packages/example/package.json"];
+  delete files["packages/example/CHANGELOG.md"];
+  for (const name of ["a", "b"]) {
+    files[`packages/${name}/package.json`] = { name: `@maxvyshniakov/${name}`, version: "0.2.0" };
+    files[`packages/${name}/CHANGELOG.md`] = changelog.replace("example", name);
+    files[`packages/${name}/src/index.mjs`] = "export {};\n";
+  }
+  const repo = guarded(files, ["packages/a/src/**", "packages/b/src/**"]);
+  try {
+    repo.commit({ "packages/a/src/index.mjs": "export const a = 1;\n", "packages/b/src/index.mjs": "export const b = 1;\n" }, "Both");
+    assert.match(repo.check().output, /packages\/a\/CHANGELOG.md[\s\S]*packages\/b\/CHANGELOG.md/);
+    repo.commit({ "packages/a/src/index.mjs": "export const a = 2;\n", "packages/b/src/index.mjs": "export const b = 2;\n" }, "Both again\n\nChangelog: none (fixture)");
+    assert.equal(repo.check().result, 0);
+  } finally {
+    repo.cleanup();
   }
 });
