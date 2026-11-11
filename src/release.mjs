@@ -1,7 +1,8 @@
 // Cuts package releases: moves each package's "## Unreleased" entries under a
-// new "## x.y.z - YYYY-MM-DD" heading and sets that version in package.json,
-// in bun.lock's workspace entry and in the quick start's archive names. Publish
-// the pushed release with `repo-kit publish`.
+// new "## x.y.z - YYYY-MM-DD" heading and sets that version in package.json
+// (or pyproject.toml's [project] version, changelog.versionSource), in bun.lock's
+// workspace entry and in the quick start's archive names. Publish the pushed
+// release with `repo-kit publish`.
 //
 //   repo-kit release sid-kit:minor                 a package under packages/
 //   repo-kit release minor                         the only released package
@@ -12,6 +13,7 @@ import path from "node:path";
 
 import { formatChangelog, nextVersion, parseChangelog, setLockfileWorkspaceVersion } from "./changelog.mjs";
 import { releasedPackages } from "./config.mjs";
+import { setManifestVersion } from "./version-source.mjs";
 
 export function cutRelease(changelog, { version, date }) {
   const parsed = parseChangelog(changelog);
@@ -54,13 +56,14 @@ export async function runRelease(config, args) {
   }
   const { root } = config;
   // Validate every package before writing any of them.
-  const planned = releaseRequests(requests, releasedPackages(root)).map(({ pkg, level }) => {
-    const manifestPath = path.join(pkg.dir, "package.json");
+  const planned = releaseRequests(requests, releasedPackages(root, { versionSource: config.changelog.versionSource })).map(({ pkg, level }) => {
+    const manifestPath = path.join(pkg.dir, pkg.manifestFile);
     const manifestText = fs.readFileSync(manifestPath, "utf8");
     const version = nextVersion(pkg.version, level);
     const changelogPath = path.join(pkg.dir, "CHANGELOG.md");
     const changelog = cutRelease(fs.readFileSync(changelogPath, "utf8"), { version, date });
-    return { pkg, manifestPath, manifestText, version, changelogPath, changelog };
+    const manifest = setManifestVersion(pkg.manifestFile, manifestText, { from: pkg.version, to: version });
+    return { pkg, manifestPath, manifest, version, changelogPath, changelog };
   });
 
   // bun.lock records workspace versions; set them before writing anything, so
@@ -69,11 +72,11 @@ export async function runRelease(config, args) {
   const hasLockfile = fs.existsSync(lockfilePath);
   let lockfile = hasLockfile ? fs.readFileSync(lockfilePath, "utf8") : undefined;
   for (const { pkg, version } of planned) {
-    if (pkg.workspace && hasLockfile) lockfile = setLockfileWorkspaceVersion(lockfile, pkg.path, version);
+    if (pkg.workspace && hasLockfile && pkg.manifestFile === "package.json") lockfile = setLockfileWorkspaceVersion(lockfile, pkg.path, version);
   }
-  for (const { pkg, manifestPath, manifestText, version, changelogPath, changelog } of planned) {
+  for (const { pkg, manifestPath, manifest, version, changelogPath, changelog } of planned) {
     fs.writeFileSync(changelogPath, changelog);
-    fs.writeFileSync(manifestPath, manifestText.replace(`"version": "${pkg.version}"`, `"version": "${version}"`));
+    fs.writeFileSync(manifestPath, manifest);
     console.log(`${pkg.name} ${pkg.version} -> ${version} (${date})`);
   }
   if (hasLockfile) fs.writeFileSync(lockfilePath, lockfile);
@@ -81,7 +84,7 @@ export async function runRelease(config, args) {
   const quickStartPath = config.changelog.quickStart && path.join(root, config.changelog.quickStart);
   if (quickStartPath && fs.existsSync(quickStartPath)) {
     let quickStart = fs.readFileSync(quickStartPath, "utf8");
-    for (const { pkg, version } of planned) {
+    for (const { pkg, version } of planned.filter(({ pkg }) => pkg.manifestFile === "package.json")) {
       const archive = pkg.name.replace("@", "").replace("/", "-");
       quickStart = quickStart.replaceAll(`${archive}-${pkg.version}.tgz`, `${archive}-${version}.tgz`);
     }

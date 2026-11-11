@@ -40,6 +40,12 @@ test("verify.yml passes --release for main and pull requests into main only", ()
   assert.match(text, /args:\n(?:\s+\w.*\n)*?\s+default: ""\n/, "args must not default to --release");
 });
 
+test("verify.yml checks out one commit unless the caller asks for history", () => {
+  const text = read(path.join(workflowsDir, "verify.yml"));
+  assert.match(text, /fetch-depth:\n(?:\s+\w.*\n)*?\s+default: 1\n/);
+  assert.match(text, /- uses: actions\/checkout@[0-9a-f]{40}\n {8}with:\n {10}fetch-depth: \$\{\{ inputs\.fetch-depth \}\}\n/);
+});
+
 test("repo-kit's own main checks use the current action and ordinary verification", () => {
   const text = read(path.join(workflowsDir, "check.yml"));
   assert.match(text, /- uses: \.\/actions\/setup-bun\n/);

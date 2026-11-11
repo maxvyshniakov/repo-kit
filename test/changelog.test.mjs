@@ -12,8 +12,10 @@ import {
 } from "../src/changelog.mjs";
 import { changelogIssues, changelogPackages, peerIssues, runCheckChangelogs } from "../src/check-changelogs.mjs";
 import { withDefaults } from "../src/config.mjs";
+import { releasedPackages } from "../src/config.mjs";
 import { cutRelease, releaseRequests, runRelease } from "../src/release.mjs";
-import { changelog, kitRoot, rootPackageFiles, tempRepository, workspaceFiles } from "./fixtures.mjs";
+import { chooseVersionSource, pyprojectProject, setPyprojectVersion } from "../src/version-source.mjs";
+import { changelog, kitRoot, pyproject, pyprojectFiles, rootPackageFiles, tempRepository, workspaceFiles } from "./fixtures.mjs";
 
 const lockfile = `{
   "workspaces": {
@@ -218,3 +220,59 @@ test("a workspace missing from bun.lock fails the release before any file is wri
     repository.cleanup();
   }
 });
+
+test("pyproject.toml's [project] version is read and set in place, other tables untouched", () => {
+  assert.deepEqual(pyprojectProject(pyproject), { name: "example", version: "0.2.0", versionLine: 6 });
+  const updated = setPyprojectVersion(pyproject, "0.3.0");
+  assert.equal(updated, pyproject.replace('version = "0.2.0"  # repo-kit', 'version = "0.3.0"  # repo-kit'));
+  assert.match(updated, /\[tool\.poetry\]\nversion = "9\.9\.9"/);
+  assert.equal(pyprojectProject("[project]\nname = 'single'\nversion = '1.2.3'\n").version, "1.2.3");
+  assert.equal(setPyprojectVersion("[project]\nversion = '1.2.3'\n", "1.3.0"), "[project]\nversion = '1.3.0'\n");
+  assert.throws(() => pyprojectProject('[project]\nname = "x"\ndynamic = ["version"]\n'), /no static version/);
+  assert.throws(() => pyprojectProject('[tool.ruff]\nline-length = 120\n'), /no \[project\] table/);
+});
+
+test("the version source is configured, or pyproject.toml when there is no package.json", () => {
+  const python = tempRepository(pyprojectFiles());
+  const both = tempRepository(rootPackageFiles({ "pyproject.toml": pyproject }));
+  try {
+    assert.equal(chooseVersionSource(python.root), "pyproject.toml");
+    assert.equal(chooseVersionSource(both.root), "package.json");
+    assert.equal(chooseVersionSource(both.root, "pyproject.toml"), "pyproject.toml");
+    assert.throws(() => chooseVersionSource(both.root, "setup.cfg"), /must be package.json or pyproject.toml/);
+    assert.deepEqual(releasedPackages(python.root).map(({ name, version, manifestFile, path }) => ({ name, version, manifestFile, path })),
+      [{ name: "example", version: "0.2.0", manifestFile: "pyproject.toml", path: "." }]);
+    assert.throws(() => releasedPackages(tempRepository({}).root), /pyproject.toml not found; set changelog.versionSource/);
+  } finally {
+    python.cleanup();
+    both.cleanup();
+  }
+});
+
+for (const [kind, files, versionSource] of [
+  ["a Python package without package.json", pyprojectFiles(), undefined],
+  ["pyproject.toml chosen beside a tooling package.json", pyprojectFiles({ "package.json": { name: "tooling", private: true } }), "pyproject.toml"],
+]) {
+  test(`check-changelogs and release work for ${kind}`, async () => {
+    const repository = tempRepository(files);
+    try {
+      const config = withDefaults({ changelog: { versionSource } });
+      config.root = repository.root;
+      assert.equal(quiet(() => runCheckChangelogs(config)), true);
+      assert.equal(quiet(() => runCheckChangelogs(config, { release: true })), false);
+      await quiet(() => runRelease(config, ["minor", "--date=2026-11-11"]));
+      const text = fs.readFileSync(path.join(repository.root, "pyproject.toml"), "utf8");
+      assert.equal(pyprojectProject(text).version, "0.3.0");
+      assert.match(text, /\[tool\.poetry\]\nversion = "9\.9\.9"/);
+      if (files["package.json"]) assert.deepEqual(JSON.parse(fs.readFileSync(path.join(repository.root, "package.json"), "utf8")), { name: "tooling", private: true });
+      assert.match(fs.readFileSync(path.join(repository.root, "CHANGELOG.md"), "utf8"), /## Unreleased\n\n## 0.3.0 - 2026-11-11\n\n### Fixed/);
+      assert.equal(quiet(() => runCheckChangelogs(config, { release: true })), true);
+      // A version that disagrees names pyproject.toml.
+      fs.writeFileSync(path.join(repository.root, "pyproject.toml"), setPyprojectVersion(text, "0.3.1"));
+      const [pkg] = changelogPackages(repository.root, { versionSource });
+      assert.match(changelogIssues(pkg).join("\n"), /pyproject.toml version 0.3.1 does not match the newest changelog release 0.3.0/);
+    } finally {
+      repository.cleanup();
+    }
+  });
+}

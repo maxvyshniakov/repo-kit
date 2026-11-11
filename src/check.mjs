@@ -32,11 +32,13 @@ export function workflowIssues(root, version = KIT_VERSION) {
 }
 
 export function packageManagerIssues(root, bunVersion = BUN_VERSION) {
-  const { packageManager } = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  const manifest = path.join(root, "package.json");
+  if (!fs.existsSync(manifest)) return []; // a Python package, say
+  const { packageManager } = JSON.parse(fs.readFileSync(manifest, "utf8"));
   if (!packageManager) return [];
   return packageManager === `bun@${bunVersion}` ? [] : [`package.json packageManager is ${packageManager}; the workflows run bun@${bunVersion}`];
 }
 
-export function kitIssues(root) {
-  return [...hookIssues(root), ...workflowIssues(root), ...packageManagerIssues(root)];
+export function kitIssues(root, config = {}) {
+  return [...hookIssues(root, config), ...workflowIssues(root), ...packageManagerIssues(root)];
 }

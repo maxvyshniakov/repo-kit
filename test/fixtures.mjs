@@ -91,3 +91,29 @@ export function workspaceFiles(extra = {}) {
     ...extra,
   };
 }
+
+/** A Python repository (as Lanefather): pyproject.toml's [project] at version 0.2.0, no package.json. */
+export const pyproject = `# Checks only; the package installs without a build step.
+[build-system]
+requires = ["setuptools"]
+
+[project]
+name = "example"
+version = "0.2.0"  # repo-kit release sets this
+requires-python = ">=3.11"
+dependencies = [
+  "tomli>=2; python_version < '3.11'",
+]
+
+[tool.poetry]
+version = "9.9.9"
+`;
+
+export function pyprojectFiles(extra = {}) {
+  return {
+    "pyproject.toml": pyproject,
+    "CHANGELOG.md": changelog.replace("# @maxvyshniakov/example Changelog", "# example Changelog"),
+    "repo-kit.config.mjs": "export default {};\n",
+    ...extra,
+  };
+}

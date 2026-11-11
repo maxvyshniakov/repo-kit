@@ -97,6 +97,11 @@ export default {
   changelog: {
     quickStart: "docs/GETTING_STARTED.md", // archive names checked and moved by release, when the file exists
     peerScope: "@maxvyshniakov/",          // peer ranges checked against workspace versions and exact devDependency pins
+    versionSource: "package.json",         // or "pyproject.toml"; default package.json, pyproject.toml without a root package.json
+    paths: ["packages/sid-kit/src/**"],    // shipped paths: the changelog-entry guard (Changelog entries); default none, off
+  },
+  hooks: {
+    managed: ["pre-push", "commit-msg"],   // the managed hooks sync writes and check expects; default every one that applies
   },
   release: {
     gate: "local",  // what publish requires: "local" (default), a passed `repo-kit release-gate`; "ci", the checks workflow
@@ -112,6 +117,13 @@ export default {
 
 The released package is the one directory under `packages/` with a `package.json`, or the root package when there is
 no `packages/`. `release` and `check-changelogs` handle several workspace packages; `publish` expects exactly one.
+
+`changelog.versionSource: "pyproject.toml"` reads each package's name and version from `pyproject.toml`'s `[project]`
+table instead (`name = "..."`, `version = "x.y.z"`, each on one line; a `dynamic` version is not supported), with the
+same layout rule: each directory under `packages/` holding a `pyproject.toml`, else the root. A repository without a
+root `package.json` uses it without the setting. `release` then sets that `version` line and nothing else in the file;
+`bun.lock` and quick-start archives are npm-only and not touched. `publish` refuses such a package, and
+`packed-consumer` is npm-only.
 
 ### Step memory
 
@@ -143,11 +155,13 @@ Re-measure after a change that adds tests or stories; a peak above its declared 
 | `verify [--release] [--browser]` | Runs the config's steps side by side, within the run's memory. Output streams with a step prefix. The first failure stops the rest and prints that step's last 80 lines; a step past its timeout fails and its whole process tree is stopped; a signal stops every step, and a reaper stops them when verify is killed outright. The summary shows the peak RSS and each step's measured peak beside its declared `memory`: the resident memory of the step's whole process tree, browsers in sessions of their own included, and on Linux the job cgroup's peak. |
 | `pre-push` | Runs from `.githooks/pre-push`. Verifies each pushed commit in a clean temporary worktree (`--release` for `main`), once per commit. Refuses Bun older than 1.4.4. Skip once with `git push --no-verify`. |
 | `hooks install` | `prepare`: points `core.hooksPath` at `.githooks`, unless someone set another path or `CI` is set. |
-| `hooks sync` | Writes the managed hooks into `.githooks`: a `pre-push` shim and `reference-transaction`. Other hooks there are the repository's own. |
+| `hooks sync` | Writes the managed hooks into `.githooks`: a `pre-push` shim and `reference-transaction`; `lane-check` with a `.lanefather.toml`; `commit-msg` with `changelog.paths`. `hooks.managed` keeps only the named ones. Other hooks there are the repository's own, and an existing `commit-msg` of its own is never replaced. |
 | `hooks check` / `hooks status` | The tracked managed hooks match the kit / Git would run every tracked hook. |
 | `check` | `hooks check`. Every `maxvyshniakov/repo-kit/...@` reference in `.github/workflows` names the installed version. `packageManager` names `bun@1.4.4`. |
-| `check-changelogs [--release]` | Changelog format, version agreement (`package.json`, the newest release, `bun.lock`, quick start archives) and peer ranges. `--release`: no unreleased entries. |
-| `release [<package>:]<patch\|minor\|major\|x.y.z> [--date=]` | Cuts `## Unreleased` into a version; sets `package.json`, `bun.lock` and the quick start. |
+| `check-changelogs [--release]` | Changelog format, version agreement (`package.json` or `pyproject.toml`, the newest release, `bun.lock`, quick start archives) and peer ranges. `--release`: no unreleased entries. |
+| `check-changelog-entries <base>..<head>` | The [changelog-entry guard](#changelog-entries) on every commit of the range. Without `changelog.paths`, nothing. |
+| `commit-msg <message file>` | Runs from `.githooks/commit-msg`: the same guard on the commit being made. Skip once with `git commit --no-verify`. |
+| `release [<package>:]<patch\|minor\|major\|x.y.z> [--date=]` | Cuts `## Unreleased` into a version; sets `package.json` (or `pyproject.toml`), `bun.lock` and the quick start. |
 | `release-gate [<ref>] [--rerun] [--no-attest]` | The local [release gate](#release-gate) on a commit (default `HEAD`): a clean worktree, frozen install, `verify --release`, `verify --browser` with Chromium in software compositing, the TLS gate; records the commit status `Library checks (local, <platform>)`. `--mode` prints `release.gate`. |
 | `ci-gate` | In a workflow job that needs the checks (`deploy-storybook.yml`): writes `run=true` under gate `local`, or under gate `ci` when every job in `REPO_KIT_NEEDS` (the caller's `toJSON(needs)`) passed. |
 | `publish [--resume]` | TLS gate; HEAD must be `origin/main` by SHA (any branch, worktree or detached HEAD); the [release gate](#release-gate) on that commit: a passed `release-gate` status (gate `local`) or the checks workflow (gate `ci`), not inside Actions; publishes, checks the registry serves the version, tags `v<version>` (GH007 recovery printed when the tag push is declined), then requests `publish.notify`. `--resume` finishes a partial publication. |
@@ -156,6 +170,65 @@ Re-measure after a change that adds tests or stories; a peak above its declared 
 | `tls` | The TLS gate (below). |
 | `packed-consumer [--keep]` | Packs, installs into a temporary consumer, imports every entrypoint in plain Node, type-checks under `nodenext` without `skipLibCheck`, then runs the probes. Optional peers are not installed. |
 | `shoot <story id filter...> [<url>\|--url=] [--theme=] [--width=] [--browser=] [--out=] [--viewport]` | [Story screenshots](#story-screenshots) from a running Storybook, under a lease of `shoot.slots`. |
+
+## Changelog entries
+
+A package's changelog misses changes when nothing asks for an entry. The guard asks, deterministically, from Git alone:
+a commit that changes a package's shipped paths adds or changes a line under `## Unreleased` in that package's
+`CHANGELOG.md`, or ends its message with the trailer `Changelog: none` and an optional reason.
+
+```js
+// repo-kit.config.mjs
+export default {
+  changelog: {
+    // One package (or globs inside packages/<name>/ when there are several):
+    paths: ["packages/sid-kit/src/**", "packages/sid-kit/package.json", "!packages/sid-kit/src/**/*.test.tsx"],
+    // Or keyed by package directory, for globs outside it:
+    // paths: { "packages/sid-kit": ["packages/sid-kit/src/**", "tokens/**"] },
+  },
+};
+```
+
+Globs are repository-relative: `*` and `?` stay within a path segment, `**` spans segments, `{a,b}` is either, a
+trailing `/` means everything below a directory, and a leading `!` excludes what the others include. With no
+`changelog.paths` the guard is off.
+
+| A commit | Result |
+|---|---|
+| changes no shipped path | passes |
+| changes one and adds or changes a non-blank, non-heading line under `## Unreleased` of that package's changelog | passes |
+| changes one and carries `Changelog: none` or `Changelog: none (<reason>)` as a trailer | passes |
+| is a merge commit (more than one parent) | exempt |
+| cuts that package's release: its newest changelog release is newer and is the version the manifest now records, as after `repo-kit release` | exempt |
+| anything else, including only reordering, removing or editing older releases' lines | fails, naming the files and the changelog |
+
+The trailer is read as `git interpret-trailers` parses trailers: it belongs to the message's last paragraph, beside
+`Co-Authored-By:` for example, not on the subject line. A `Changelog:` trailer with any other value fails and says so.
+
+### Where it runs
+
+- **commit-msg hook.** `repo-kit hooks sync` writes `.githooks/commit-msg` when `changelog.paths` is set; `repo-kit hooks
+  install` (the `prepare` script) activates `.githooks`. It checks the index against `HEAD` (against `HEAD`'s parent for
+  `git commit --amend`, seen on the `git` command line; an alias that hides `--amend` is checked as a new commit) and
+  skips merges in progress. It runs the installed kit, the main checkout's in a linked worktree, or a `repo-kit` on
+  `PATH` for a repository without `node_modules`. `git commit --no-verify` skips it once.
+- **verify step.** `{ name: "changelog entries", command: ["run", "check:changelog-entries"] }` with
+  `"check:changelog-entries": "repo-kit check-changelog-entries origin/main..HEAD"` (the branch commits integrate into).
+  The base must be in the checkout: in CI call `verify.yml` with `fetch-depth: 0`. A range Git cannot resolve fails.
+- **CI on its own.** On a pull request: `repo-kit check-changelog-entries ${{ github.event.pull_request.base.sha }}..${{ github.sha }}`
+  after a checkout with `fetch-depth: 0`.
+
+The range form checks every commit of the range against the current checkout's `changelog.paths`: adopt it in a
+commit of its own, or with a base past the commits from before.
+
+### For an AGENTS.md
+
+A repository's agent instructions can link here and carry this paragraph:
+
+> A commit that changes a shipped path (`changelog.paths` in `repo-kit.config.mjs`) adds or changes a line under
+> `## Unreleased` in that package's `CHANGELOG.md`, in the same commit. When the change is invisible to the package's
+> users (tests, internal refactoring, tooling), end the message with the trailer `Changelog: none (<reason>)` instead.
+> The commit-msg hook and `repo-kit check-changelog-entries` enforce it; merges and release cuts are exempt.
 
 ## Working with Lanefather
 
@@ -445,7 +518,7 @@ jobs:
 
 | Workflow | Inputs |
 |---|---|
-| `verify.yml` | `args` (none; `--release` is added for `main` and pull requests into `main`), `slots` (`all`), `slot-wait` (0: wait as long as the job runs), `runner`, `timeout-minutes` (20) |
+| `verify.yml` | `args` (none; `--release` is added for `main` and pull requests into `main`), `slots` (`all`), `slot-wait` (0: wait as long as the job runs), `runner`, `timeout-minutes` (20), `fetch-depth` (1; 0 for a [changelog-entries](#changelog-entries) range step) |
 | `browser.yml` | `checks` (JSON list of `{name, run}`), `build`, `playwright` (true), `slots` (`all`: the build and every check lease them together), `slot-wait` (0), `runner`, `timeout-minutes` (45: the wait, the build and every check) |
 | `deploy-storybook.yml` | `url`, `needs` (the caller's `toJSON(needs)`, for `repo-kit ci-gate`; default `{}`), `environment` (`storybook`), `slots` (`all`, for the builds and `storybook:prepare-deploy`), `slot-wait` (0), `timeout-minutes` (30); `STORYBOOK_CLOUDFLARE_API_TOKEN` from that environment, with `secrets: inherit` |
 | `release.yml` | `command` (`bun run release:publish`), `enabled` (true), `slots` (`all`), `slot-wait` (0), `runner`, `timeout-minutes` (30); the caller grants `contents: write`, `packages: write` |

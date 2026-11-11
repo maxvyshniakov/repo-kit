@@ -34,6 +34,10 @@ on:
         description: Seconds to wait for that lease before failing with that reason; 0 waits as long as the job runs.
         type: number
         default: 0
+      fetch-depth:
+        description: actions/checkout's fetch-depth. 0 fetches every branch's history, which a verify step running `repo-kit check-changelog-entries origin/main..HEAD` needs.
+        type: number
+        default: 1
 jobs:
   verify:
     runs-on: ${{ fromJSON(inputs.runner) }}
@@ -51,6 +55,8 @@ jobs:
       REPO_KIT_VERIFY_SLOTS: ${{ inputs.slots }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: ${{ inputs.fetch-depth }}
       - uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.4.0
       - run: bun run verify -- $RELEASE_ARGS $VERIFY_ARGS
         env:

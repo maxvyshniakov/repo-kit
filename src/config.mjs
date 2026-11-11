@@ -5,7 +5,9 @@
 //     verify: { steps: ({ release }) => [...], browser: () => [...], slots: 1, browserSlots: 2, workerMemory: 0.9, stepTimeout: 15 },
 //     prePush: { slots: 3 },
 //     publish: { checks: "check.yml", notify: [{ repository, workflow, ref }] },
-//     changelog: { quickStart: "docs/GETTING_STARTED.md", peerScope: "@maxvyshniakov/" },
+//     changelog: { quickStart: "docs/GETTING_STARTED.md", peerScope: "@maxvyshniakov/", versionSource: "package.json",
+//                  paths: ["packages/sid-kit/src/**"] },
+//     hooks: { managed: ["commit-msg"] },
 //     release: { gate: "local", afterCut({ root, packages }) {} },
 //     packedConsumer: { ... },
 //     shoot: { url: "http://127.0.0.1:6010", storybookDir: "apps/storybook", slots: 1 },
@@ -14,6 +16,8 @@ import fs from "node:fs";
 import nodeModule from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+
+import { chooseVersionSource, readManifestText } from "./version-source.mjs";
 
 export const CONFIG_FILE = "repo-kit.config.mjs";
 
@@ -62,6 +66,8 @@ export function withDefaults(config) {
     changelog: { quickStart: "docs/GETTING_STARTED.md", peerScope: "@maxvyshniakov/", ...config.changelog },
     // gate: "local" (repo-kit release-gate's attestation) or "ci" (the checks workflow); README.md#release-gate.
     release: { gate: "local", ...config.release },
+    // managed: the managed hooks `hooks sync` writes and `hooks check` expects; default every one that applies.
+    hooks: { ...config.hooks },
     packedConsumer: { ...config.packedConsumer },
     // repo-kit shoot: the Storybook it reads by default, the Storybook app whose
     // story files a failed index names, and the slots it leases.
@@ -75,19 +81,23 @@ export function readJson(file) {
 
 /**
  * The packages this repository releases: each directory under packages/ with
- * a package.json (a workspace), or else the root package. `path` is relative
- * to the root ("." for the root package).
+ * the version source's manifest (a workspace), or else the root package.
+ * `path` is relative to the root ("." for the root package); `manifestFile` is
+ * package.json or pyproject.toml (`changelog.versionSource`, version-source.mjs).
  */
-export function releasedPackages(root) {
+export function releasedPackages(root, { versionSource } = {}) {
+  const manifestFile = chooseVersionSource(root, versionSource);
   const packagesDir = path.join(root, "packages");
   const workspace = fs.existsSync(packagesDir)
     ? fs.readdirSync(packagesDir, { withFileTypes: true })
-      .filter(entry => entry.isDirectory() && fs.existsSync(path.join(packagesDir, entry.name, "package.json")))
+      .filter(entry => entry.isDirectory() && fs.existsSync(path.join(packagesDir, entry.name, manifestFile)))
       .map(entry => `packages/${entry.name}`)
     : [];
   return (workspace.length ? workspace : ["."]).map(relative => {
     const dir = path.join(root, relative);
-    const manifest = readJson(path.join(dir, "package.json"));
-    return { path: relative, dir, manifest, name: manifest.name, version: manifest.version, workspace: relative !== "." };
+    const file = path.join(dir, manifestFile);
+    if (!fs.existsSync(file)) throw new Error(`${path.relative(root, file)} not found; set changelog.versionSource to the file that holds the version`);
+    const { manifest, name, version } = readManifestText(manifestFile, fs.readFileSync(file, "utf8"));
+    return { path: relative, dir, manifest, manifestFile, name, version, workspace: relative !== "." };
   }).sort((a, b) => a.name.localeCompare(b.name));
 }

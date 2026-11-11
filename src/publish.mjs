@@ -19,6 +19,7 @@ import { notifyAll } from "./notify.mjs";
 import { attestationRefusal, publishGatePlan, readAttestation, releaseGate } from "./release-gate.mjs";
 import { runTlsGate } from "./tls.mjs";
 import { resolveToken } from "./token.mjs";
+import { chooseVersionSource } from "./version-source.mjs";
 
 // The release commit is identified by SHA, not by the checked-out branch's
 // name: a worktree or a detached HEAD at origin/main publishes the same commit
@@ -139,7 +140,11 @@ export async function runPublish(config, { resume = false } = {}) {
     for (const line of lines) console.error(line);
     return 1;
   };
-  const [pkg, ...others] = changelogPackages(root, { quickStart: config.changelog.quickStart });
+  const { quickStart, versionSource } = config.changelog;
+  if (chooseVersionSource(root, versionSource) !== "package.json") {
+    return fail(["Not publishing: repo-kit publish uploads npm packages; this repository's version source is pyproject.toml."]);
+  }
+  const [pkg, ...others] = changelogPackages(root, { quickStart });
   if (!pkg || others.length) return fail(["Not publishing: expected exactly one released package (the root package or one under packages/)."]);
   const tag = `v${pkg.version}`;
   const gate = releaseGate(config);

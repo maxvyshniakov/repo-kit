@@ -14,6 +14,9 @@ const USAGE = `Usage: repo-kit <command>
   hooks <install|sync|check|status>
   check                            managed hooks, workflow references and packageManager match the kit
   check-changelogs [--release]
+  check-changelog-entries <base>..<head>
+                                   each commit changing changelog.paths adds an Unreleased line or says "Changelog: none"
+  commit-msg <message file>        the commit-msg hook: the same check on the commit being made
   release [<package>:]<level> [--date=YYYY-MM-DD]
   release-gate [<ref>] [--rerun] [--no-attest]
                                    the local release gate on a commit (default HEAD); records its commit status
@@ -74,20 +77,28 @@ export async function main([command, ...args]) {
       const hooks = await import("./hooks.mjs");
       const [action] = args;
       if (action === "install") return hooks.installHooks(config.root), 0;
-      if (action === "sync") return hooks.syncHooks(config.root), 0;
+      if (action === "sync") return hooks.syncHooks(config.root, config), 0;
       if (action === "check" || action === "status") {
-        const issues = action === "check" ? hooks.hookIssues(config.root) : hooks.hookStatus(config.root);
+        const issues = action === "check" ? hooks.hookIssues(config.root, config) : hooks.hookStatus(config.root);
         return report(`Git hooks ${action}`, issues);
       }
       return usage();
     }
     case "check": {
       const { kitIssues } = await import("./check.mjs");
-      return report("repo-kit check", kitIssues(config.root));
+      return report("repo-kit check", kitIssues(config.root, config));
     }
     case "check-changelogs": {
       const { runCheckChangelogs } = await import("./check-changelogs.mjs");
       return runCheckChangelogs(config, { release: args.includes("--release") }) ? 0 : 1;
+    }
+    case "check-changelog-entries": {
+      const { runCheckChangelogEntries } = await import("./changelog-entries.mjs");
+      return runCheckChangelogEntries(config, args);
+    }
+    case "commit-msg": {
+      const { runCommitMsg } = await import("./changelog-entries.mjs");
+      return runCommitMsg(config, args);
     }
     case "release": {
       const { runRelease } = await import("./release.mjs");

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { withDefaults } from "../src/config.mjs";
 import { dispatchUrl, notify, notifyAll } from "../src/notify.mjs";
 import {
   checksState,
@@ -15,9 +16,12 @@ import {
   registryUrl,
   releaseCommitOf,
   resumePublication,
+  runPublish,
   tagEnvironment,
   tagPushRecovery,
 } from "../src/publish.mjs";
+
+import { pyprojectFiles, tempRepository } from "./fixtures.mjs";
 
 const ready = { token: "t", dirty: false, head: "a".repeat(40), upstream: "a".repeat(40), issues: [], tagExists: false, tag: "v0.2.0" };
 
@@ -191,4 +195,20 @@ test("publish follows release.gate: the local attestation before bun publish, or
   assert.match(branch, /if \(attestation\.state !== "passed"\) return fail\(/);
   // The gate is read before the TLS gate, so a mistyped release.gate fails first.
   assert.ok(source.indexOf("releaseGate(config)") < source.indexOf("runTlsGate()"));
+});
+
+test("publish refuses a Python package before the TLS gate or any token", async () => {
+  const repository = tempRepository(pyprojectFiles());
+  const { error } = console;
+  const lines = [];
+  console.error = line => lines.push(line);
+  try {
+    const config = withDefaults({});
+    config.root = repository.root;
+    assert.equal(await runPublish(config), 1);
+    assert.match(lines.join("\n"), /publish uploads npm packages; this repository's version source is pyproject.toml/);
+  } finally {
+    console.error = error;
+    repository.cleanup();
+  }
 });

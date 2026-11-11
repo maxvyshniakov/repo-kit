@@ -20,7 +20,8 @@ commands and pins the version that verifies them.
 It is useful for a library or a family of libraries sharing Bun, Git and GitHub-based publishing. Tests and builds
 remain your commands. Browser/Storybook checks, package-consumer probes and release notifications are optional.
 Consumer commands and configuration run with the invoking account's privileges; verification is not a sandbox.
-The publisher currently expects one publishable package; changelog/release helpers also understand workspaces.
+The publisher currently expects one publishable package; changelog/release helpers also understand workspaces and
+Python packages, whose version lives in `pyproject.toml`.
 
 ## Status
 
@@ -141,6 +142,28 @@ The managed `reference-transaction` hook also protects agent updates to `dev` an
 Lanefather's landing lock and `lanefather promote`. This is an opinionated branch policy; run verification directly
 or in CI if you only want the check runner. Repo-Kit's own repository uses a separate main-only publishing policy.
 
+## Changelog entries
+
+A commit that changes what a package ships must say so in its changelog. List the shipped paths in
+`repo-kit.config.mjs`:
+
+```js
+export default {
+  changelog: { paths: ["packages/sid-kit/src/**", "!packages/sid-kit/src/**/*.test.tsx"] },
+};
+```
+
+Each commit touching those paths then adds or changes a line under `## Unreleased` in that package's `CHANGELOG.md`,
+or ends its message with the trailer `Changelog: none`, optionally with a reason: `Changelog: none (tests only)`.
+Merge commits and release commits (the version cut `repo-kit release` writes) are exempt. Without `changelog.paths`
+nothing is checked.
+
+`repo-kit hooks sync` then also writes a managed `commit-msg` hook, which checks the commit being made.
+`repo-kit check-changelog-entries origin/main..HEAD` checks every commit of a range, for a verify step or CI.
+The check reads only Git: the same commits give the same answer everywhere.
+
+[Configuration, CI and an AGENTS.md paragraph](docs/reference.md#changelog-entries)
+
 ## Working with Lanefather
 
 A consumer using parallel lanes supplies `.lanefather.toml` with its project identity, state location and:
@@ -167,6 +190,7 @@ went through lane landing still needs separate publication reconciliation.
 | Run configured browser checks | `repo-kit verify --browser` |
 | Check configuration, hooks and workflow pins | `repo-kit check` |
 | Validate the packed package in a consumer | `repo-kit packed-consumer` |
+| Check changelog entries of a commit range | `repo-kit check-changelog-entries <base>..<head>` |
 | Cut versions and changelogs | `repo-kit release` |
 | Verify an exact release revision | `repo-kit release-gate <ref>` |
 | Publish that verified revision | `repo-kit publish` |
