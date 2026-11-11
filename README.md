@@ -218,7 +218,7 @@ for example:
 ```yaml
 jobs:
   check:
-    uses: maxvyshniakov/repo-kit/.github/workflows/verify.yml@v0.4.0
+    uses: maxvyshniakov/repo-kit/.github/workflows/verify.yml@v0.5.0
     with:
       runner: '["ubuntu-latest"]'
     permissions:

@@ -4,6 +4,8 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+## 0.5.0 - 2026-11-11
+
 ### Added
 
 - `changelog.versionSource: "pyproject.toml"` reads and releases a Python package's version from `pyproject.toml`'s `[project]` table; a repository without a root `package.json` uses it by default. `check-changelogs` compares it with the newest release and `release` sets it.
