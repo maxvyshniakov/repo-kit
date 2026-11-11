@@ -1,8 +1,8 @@
 // Safari Technology Preview over WebDriver, for repo-kit shoot's `safari`.
 //
-// Playwright drives WebKit, not Safari, and safaridriver refuses a Safari the owner already
+// Playwright drives WebKit, not Safari, and safaridriver refuses a Safari the user already
 // has open ("Safari was not launched for automation"), so the checks use Safari Technology
-// Preview: it runs beside Safari and has its own WebDriver. One-time setup by the owner:
+// Preview: it runs beside Safari and has its own WebDriver. One-time setup:
 // install it (`brew install --cask safari-technology-preview`), then in its Settings turn on
 // Advanced → Show features for web developers and Developer → Allow remote automation.
 //
@@ -71,7 +71,7 @@ function otherDrivers(own) {
   }
 }
 
-// Only the instance safaridriver started (--automation); the owner's own window is left alone.
+// Only the instance safaridriver started (--automation); the user's own window is left alone.
 const automationInstance = `${app}/Contents/MacOS/Safari Technology Preview .*--automation`;
 
 async function quitAutomationInstance() {

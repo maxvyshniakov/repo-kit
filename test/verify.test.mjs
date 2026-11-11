@@ -160,7 +160,7 @@ test("verify's memory is its lease's slots, capped by the cgroup and MemAvailabl
   assert.equal(verifyMemory({}, linux), 5, "no lease on Linux: what the kernel reports available");
   assert.equal(verifyMemory({}, { ...linux, constrained: 4 * GiB }), 4, "a cgroup limit below it");
   assert.equal(verifyMemory({}, { platform: "darwin", free: 1 * GiB, total: 32 * GiB, constrained: 0, capacity: noSlotfather }), 32, "macOS reports cached pages as used");
-  // The homelab runner: two slots of 5 GiB.
+  // A self-hosted runner with two slots of 5 GiB.
   const runner = { platform: "linux", free: 9 * GiB, total: 12 * GiB, constrained: 6 * GiB, capacity: () => ({ total: 2, gib_per_slot: 5 }) };
   const lease = count => ({ SLOTFATHER_LEASE: "/lease", SLOTFATHER_COUNT: String(count) });
   assert.equal(verifyMemory(lease(1), runner), 5, "one slot: its memory");

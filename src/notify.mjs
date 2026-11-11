@@ -1,7 +1,6 @@
 // Requests another repository's workflow after a release, such as Data Grid's
 // catalog dependency workflow, which adopts a new Sid-Kit, Inline Measure or
-// Text Truncate when every check passes (maxvyshniakov/data-grid
-// docs/CATALOG-DEPENDENCIES.md). Reuses the publishing token locally; no
+// Text Truncate when every check passes. Reuses the publishing token locally; no
 // cross-repository PAT is stored in CI.
 //
 //   publish: { notify: [{ repository: "maxvyshniakov/data-grid", workflow: "update-catalog-dependencies.yml", ref: "main" }] }

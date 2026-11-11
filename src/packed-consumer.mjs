@@ -177,7 +177,7 @@ export async function runPackedConsumer(config, { keep = false, args = [] } = {}
       // A package that depends on another released here gets the local archive too.
       overrides: archives,
     }, null, 2)}\n`);
-    // Dependencies on other @maxvyshniakov packages come from the private registry.
+    // Dependencies on other @maxvyshniakov packages come from GitHub Packages.
     if (fs.existsSync(path.join(root, "bunfig.toml"))) fs.copyFileSync(path.join(root, "bunfig.toml"), path.join(consumerDir, "bunfig.toml"));
     const install = run("bun", ["install", "--no-progress"], { cwd: consumerDir });
     if (install.status !== 0) throw new Error(`bun install failed in the consumer:\n${install.stdout}\n${install.stderr}`);

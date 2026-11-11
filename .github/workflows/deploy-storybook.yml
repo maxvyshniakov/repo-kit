@@ -1,4 +1,4 @@
-# Reusable: builds Storybook and publishes it to its private Cloudflare host.
+# Reusable: builds Storybook and publishes it to the caller's Cloudflare host.
 # The caller decides when (main pushes and dispatches) and after which jobs, and
 # passes their results; `repo-kit ci-gate` then follows release.gate in
 # repo-kit.config.mjs: under "local" the checks are advisory and the deploy runs
@@ -36,11 +36,11 @@ on:
         type: string
         default: "{}"
       runner:
-        description: runs-on, as JSON.
+        description: runs-on, as JSON. The default names the maintainer's self-hosted runner; other callers pass their own, for example '["ubuntu-latest"]'.
         type: string
         default: '["self-hosted", "homelab"]'
       slots:
-        description: slotfather slots the builds lease, where the runner has slotfather; all holds the whole runner (the homelab runner's two 5 GiB slots).
+        description: slotfather slots the builds lease, where the runner has slotfather; all holds the whole runner.
         type: string
         default: all
       slot-wait:

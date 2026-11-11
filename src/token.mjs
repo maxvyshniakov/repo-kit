@@ -1,4 +1,4 @@
-// GITHUB_TOKEN for the private GitHub Packages registry, and the Bun floor.
+// GITHUB_TOKEN for the GitHub Packages registry, and the Bun floor.
 //
 // bunfig.toml reads @maxvyshniakov packages with token = "$GITHUB_TOKEN", so
 // every `bun install` needs it: read:packages to install, write:packages to

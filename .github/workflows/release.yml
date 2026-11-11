@@ -23,11 +23,11 @@ on:
         type: boolean
         default: true
       runner:
-        description: runs-on, as JSON.
+        description: runs-on, as JSON. The default names the maintainer's self-hosted runner; other callers pass their own, for example '["ubuntu-latest"]'.
         type: string
         default: '["self-hosted", "homelab"]'
       slots:
-        description: slotfather slots the job leases, where the runner has slotfather; all holds the whole runner (the homelab runner's two 5 GiB slots).
+        description: slotfather slots the job leases, where the runner has slotfather; all holds the whole runner.
         type: string
         default: all
       slot-wait:

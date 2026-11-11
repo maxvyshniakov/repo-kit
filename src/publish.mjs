@@ -1,4 +1,4 @@
-// Publishes the released version of the repository's package to the private
+// Publishes the released version of the repository's package to the
 // GitHub Packages registry and tags it v<version>. Run on a clean checkout whose
 // HEAD is origin/main by SHA (a branch of any name, a worktree or a detached
 // HEAD), after `bun run release` was pushed. GITHUB_TOKEN (or `gh auth token`)

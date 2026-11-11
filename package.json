@@ -2,7 +2,11 @@
   "name": "@maxvyshniakov/repo-kit",
   "version": "0.4.0",
   "type": "module",
-  "description": "Shared release, publish and verification tooling for the maxvyshniakov library repositories.",
+  "description": "Shared verification, pre-push, release and publish tooling for Bun-based JavaScript and TypeScript libraries.",
+  "keywords": ["bun", "verify", "pre-push", "release", "changelog", "github-actions", "monorepo"],
+  "author": "Max Wish (https://maxvyshniakov.com)",
+  "homepage": "https://github.com/maxvyshniakov/repo-kit#readme",
+  "bugs": "https://github.com/maxvyshniakov/repo-kit/issues",
   "packageManager": "bun@1.4.4",
   "bin": {
     "repo-kit": "src/cli.mjs",

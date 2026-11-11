@@ -20,14 +20,14 @@ on:
         type: string
         default: ""
       runner:
-        description: runs-on, as JSON.
+        description: runs-on, as JSON. The default names the maintainer's self-hosted runner; other callers pass their own, for example '["ubuntu-latest"]'.
         type: string
         default: '["self-hosted", "homelab"]'
       timeout-minutes:
         type: number
         default: 20
       slots:
-        description: slotfather slots the job leases, where the runner has slotfather; all holds the whole runner (the homelab runner's two 5 GiB slots).
+        description: slotfather slots the job leases, where the runner has slotfather; all holds the whole runner.
         type: string
         default: all
       slot-wait:
@@ -38,6 +38,10 @@ jobs:
   verify:
     runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
+    # Never more than the caller grants; never more than reading the code and packages.
+    permissions:
+      contents: read
+      packages: read
     env:
       STORYBOOK_DISABLE_TELEMETRY: "1"
       # bunfig.toml reads @maxvyshniakov packages from GitHub Packages with this

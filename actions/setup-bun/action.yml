@@ -2,7 +2,7 @@ name: Set up Bun behind the TLS gate
 description: >-
   Installs Bun, proves on this runner that it trusts registry.npmjs.org and
   rejects the compromised eMudhra chains, then runs bun install --frozen-lockfile
-  with a token for the private GitHub Packages registry.
+  with a token for the GitHub Packages registry.
 inputs:
   bun-version:
     description: Bun to install; 1.3.14 and older trust the compromised chains.

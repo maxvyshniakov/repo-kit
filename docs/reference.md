@@ -115,8 +115,8 @@ no `packages/`. `release` and `check-changelogs` handle several workspace packag
 
 ### Step memory
 
-verify plans its steps by the memory each declares, so declare it: a step left at 0 never waits for room, and on the
-homelab runner (two 5 GiB slots, a 10 GiB cap) steps that all read 0 start together and run it out of memory.
+verify plans its steps by the memory each declares, so declare it: a step left at 0 never waits for room, and on a
+small runner (for example two 5 GiB slots, a 10 GiB cap) steps that all read 0 start together and run it out of memory.
 
 1. Run verify where memory is budgeted (CI, or under a lease on Linux) and read the summary:
 
@@ -159,15 +159,14 @@ Re-measure after a change that adds tests or stories; a peak above its declared 
 
 ## Working with Lanefather
 
-The shared orchestration process and implementer brief already live in
-[Mastack's orchestrate skill](https://github.com/maxvyshniakov/mastack/tree/main/skills/orchestrate).
+Repo-Kit does not orchestrate parallel work; the maintainer's agents follow their own orchestration process.
 [Lanefather](https://github.com/maxvyshniakov/lanefather) supplies lanes, path claims, integration, independent
 review and protected-branch promotion for projects that configure it. repo-kit supplies verification and package
 release/publish commands. Slotfather leases the machine while those commands execute; an active lane itself holds
 no machine slots.
 
 A consumer adopting parallel lanes keeps its check-contract adapter and project seams in `.lanefather.toml`.
-Follow that project's orchestration instructions and configured command (`tools/lane` is Straylight's entry point):
+Follow that project's orchestration instructions and configured command (`lanefather`, or a project wrapper):
 
 | Phase | Owner and evidence |
 |---|---|
@@ -208,7 +207,7 @@ slot_env = "REPO_KIT_SLOT"
 Run `repo-kit hooks sync` and commit the managed `.githooks/lane-check`. It works in a fresh linked checkout:
 using the installed kit in this or the main checkout to lease a frozen dependency install, then executing the
 adapter from the target checkout's locked package. Install the main checkout's dependencies once before starting
-lanes. Keep the private registry credentials available as for pre-push; the entry also resolves `gh auth token`.
+lanes. Keep the registry credentials available as for pre-push; the entry also resolves `gh auth token`.
 
 The managed entry prepares dependencies under a one-slot lease even for planning. Direct `repo-kit-lane
 --changed --base REF --plan --json` reads configuration and Git without running checks. Execution uses Repo-Kit's
@@ -267,16 +266,16 @@ index until the broken file changes again: shoot touches the file the error name
 Playwright stays the repository's own pinned devDependency: repo-kit declares it as an optional peer and loads it from
 the repository root, and `safari` needs none. `firefox` needs Firefox installed.
 
-Safari itself refuses WebDriver while the owner has it open, so `safari` drives Safari Technology Preview, which runs
-beside it. One-time setup by the owner: `brew install --cask safari-technology-preview` (the installer asks for an
+Safari itself refuses WebDriver while the user has it open, so `safari` drives Safari Technology Preview, which runs
+beside it. One-time setup: `brew install --cask safari-technology-preview` (the installer asks for an
 administrator password), then in its own Settings, Advanced → "Show features for web developers" and Developer →
 "Allow remote automation". safaridriver brings the window to the front; shoot hands focus straight back to the app
-that had it, and the window keeps drawing behind the owner's apps. When the run ends, shoot quits the automation window
+that had it, and the window keeps drawing behind the user's apps. When the run ends, shoot quits the automation window
 it started (SIGTERM: in automation mode it ignores a quit request and window close). Do not hide or minimise it: WebKit then marks the
 page hidden, stops drawing frames and cannot screenshot. A run that ended without closing its session (killed, or its
 safaridriver gone) leaves Safari Technology Preview "already paired with another WebDriver session"; when no other
-safaridriver of it runs, shoot quits that automation window (`--automation`, never the owner's own) and starts again,
-and when one runs, it fails naming that driver. Engine details: the mastack `browser-verify` skill.
+safaridriver of it runs, shoot quits that automation window (`--automation`, never the user's own) and starts again,
+and when one runs, it fails naming that driver.
 
 ```js
 // repo-kit.config.mjs; every field is optional
@@ -321,7 +320,7 @@ bun run release:publish
    Every check that starts Playwright's Chromium (Playwright's `launch`, agent-browser behind a repository's wrapper,
    a check's own `chromium.launch`) runs through it, because the gate points `PLAYWRIGHT_BROWSERS_PATH` at the mirror.
    Before the checks, the gate asks the wrapped Chromium (DevTools `SystemInfo.getInfo`) and stops unless it reports
-   `gpu_compositing: disabled_software`; on this Mac the same Chromium reports `enabled` (Metal) without the switch.
+   `gpu_compositing: disabled_software`; on a Mac the same Chromium reports `enabled` (Metal) without the switch.
    `REPO_KIT_CHROMIUM_SWITCHES` names the switches for a runner that starts a browser of its own;
 4. `bun run verify -- --release`;
 5. `bun run verify -- --browser` when the commit's config declares `verify.browser`. The gate fails if that starts no
@@ -339,8 +338,8 @@ GitHub.
 pending and failed statuses each name the command to run. Inside GitHub Actions, as in Data Grid's automated catalog
 release, the calling workflow's jobs gate the publication under either gate; publish says so.
 
-Replayed on Sid-Kit `8f6695c^` (before the rounded scroll clip fix), `check-scroll-fade-edges` passes on this Mac's GPU
-path and fails through the mirror with the CI failure's assertion; at `8f6695c` it passes through the mirror.
+Measured on a consumer: a scroll-fade check broken by a rounded-clip defect passed on a Mac's GPU path and failed
+through the mirror with the Linux CI failure's assertion; after the fix it passed through the mirror.
 
 ### Gate `ci`
 
@@ -362,13 +361,12 @@ nothing waits for them.
 The deploy and Data Grid's catalog automation stay in CI because they need the `storybook` environment's Cloudflare
 token and the workflow's registry token there. They do not gate anything. For the deploy to run after a failed check,
 its caller job needs `if: ${{ !cancelled() && … }}` and `needs: ${{ toJSON(needs) }}` (see [Workflows](#workflows));
-a caller left as before still deploys only after its checks passed. A deploy could also run from the Mac
+a caller left as before still deploys only after its checks passed. A deploy could also run from a workstation
 (`bun run storybook:prepare-deploy && bun run storybook:deploy` with `CLOUDFLARE_API_TOKEN` set), which would take
 the runner out of the release path entirely; it is not wired up.
 
-No branch protection or ruleset requires any check: GitHub offers neither for private repositories on this account's
-plan (the API answers 403, "Upgrade to GitHub Pro"), so the commit statuses are the only record and `publish` the only
-enforcement. If protection is enabled later, require `Library checks (local, macOS)` under gate `local`, or the
+Repo-Kit does not need branch protection or a ruleset: the commit statuses are the record and `publish` the
+enforcement. If a repository enables protection, require `Library checks (local, macOS)` under gate `local`, or the
 `check.yml` jobs under gate `ci`, not both.
 
 ## GITHUB_TOKEN
@@ -454,14 +452,15 @@ jobs:
 
 Every heavy step of these workflows runs under a slotfather lease where the runner has slotfather: `verify`, the
 browser build and checks, the Storybook builds and `storybook:prepare-deploy`, and the release command. What runs
-outside one is light: checkout, the TLS gate, `bun install`, the cached Playwright browser and the Cloudflare upload. `slots` defaults to `all`, the whole runner (the
-homelab runner has two 5 GiB slots), so no heavy job runs beside another and each gets the runner's memory; a job waits
+outside one is light: checkout, the TLS gate, `bun install`, the cached Playwright browser and the Cloudflare upload.
+`slots` defaults to `all`, the whole runner, so no heavy job runs beside another and each gets the runner's memory; a job waits
 for the lease instead. `verify.yml` passes `slots` to verify as `REPO_KIT_VERIFY_SLOTS`, which overrides
 `verify.slots` and `verify.browserSlots`.
 
 `browser.yml` builds once and runs its checks one after another in one job, `repo-kit checks`: every check runs,
 after a failed one too, and the job fails naming the failed ones. Under a lease of the whole runner a job per check
-could not run side by side with another anyway, and each built Storybook again (straylight#656). Set
+could not run side by side with another anyway, and each built Storybook again: three concurrent builds exhausted a
+10 GiB runner. Set
 `timeout-minutes` to cover the lease wait plus the build and every check.
 
 Jobs show as `<caller job> / <reusable job>`, for example `check / verify`, `browser / browser + stories` (named by
@@ -473,8 +472,13 @@ A cancelled run counts as failed for `publish` under gate `ci`, so `cancel-in-pr
 Jobs that do not use a reusable workflow call it directly:
 `uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.4.0`.
 
-Calling these from another repository needs repo-kit's Settings → Actions → General → Access set to
-"Accessible from repositories owned by the user".
+Any repository can call these while repo-kit is public. A private copy needs its Settings → Actions → General →
+Access set to "Accessible from repositories owned by the user".
+
+The default `runner`, `["self-hosted", "homelab"]`, is the maintainer's runner; pass your own. The verification,
+browser and Storybook jobs declare `contents: read` and `packages: read`, and `release.yml` `contents: write` and
+`packages: write`: a called job never receives more than its caller grants, and these never more than they declare.
+None of the workflows uses `pull_request_target`. Do not route pull requests from forks to a self-hosted runner.
 
 ## Versioning
 
@@ -517,7 +521,8 @@ Agent commands and repository policy: [checks](agents/checks.md),
 `dev`, using the landing lock held by `lanefather promote` (or the project's configured entry point). repo-kit
 distributes the exact copy, pinned by `REFERENCE_TRANSACTION_SHA256` in `src/hooks.mjs`, and installs it in
 consumers' managed hooks. Repo-kit's own single-branch checkout omits it. `check:upstream` compares it with
-`LANEFATHER_DIR/hooks/reference-transaction`; the checkout defaults to `~/lanefather`. `LANEFATHER_DIR` selects a
+`LANEFATHER_DIR/hooks/reference-transaction`; the checkout defaults to `~/lanefather` and the check is skipped
+without one. `LANEFATHER_DIR` selects a
 source checkout for this comparison, not the runtime engine.
 
 When Lanefather's canonical hook changes:

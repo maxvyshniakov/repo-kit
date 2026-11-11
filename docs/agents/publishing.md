@@ -12,7 +12,7 @@ Unreleased changelog entries. Release validation remains explicit.
 
 Fetch `origin`, rebase a task branch onto `origin/main`, then push its explicit SHA:
 `git push origin <sha>:refs/heads/main`. Fast-forward the main checkout afterwards.
-No Straylight promote tool or landing token is needed in this repository.
+No Lanefather promote or landing token is needed in this repository.
 Use task worktrees under `.claude/worktrees/` when the shared checkout is dirty;
 remove only worktrees belonging to completed, integrated work.
 
@@ -29,7 +29,7 @@ Only on an explicit release request: follow [README versioning](../../README.md#
 Cut the version, push main, run `bun run repo-kit release-gate origin/main`, then
 `bun run release:publish` from that exact clean revision. Publication to GitHub
 Packages and tags is separate from an ordinary push. Update consumer pins only
-within their authorized tasks. Repository visibility remains private.
+within their authorized tasks. Repository and package visibility change only by explicit owner decision.
 
 ## After push
 

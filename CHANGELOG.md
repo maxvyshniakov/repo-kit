@@ -4,6 +4,11 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+### Changed
+
+- `verify.yml` and `browser.yml` jobs declare `contents: read` and `packages: read`. Every current caller grants exactly these, so nothing changes for them; a caller granting more no longer passes it to the checks.
+- Public-repository documentation: status and terms in the README, SECURITY.md and CONTRIBUTING.md, workflow runner guidance for outside callers, package metadata, and maintainer-specific hosts and links replaced with self-contained explanations.
+
 ## 0.4.0 - 2026-11-07
 
 ### Added

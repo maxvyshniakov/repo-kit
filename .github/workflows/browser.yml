@@ -1,7 +1,8 @@
 # Reusable: browser checks against a static Storybook build. One job builds it
 # once and runs every check after it, in order, under one slotfather lease:
 # with the whole runner leased the checks could not run side by side anyway,
-# and a job per check built Storybook once per check (straylight#656). Every
+# and a job per check built Storybook once per check: three concurrent builds
+# exhausted a 10 GiB runner. Every
 # check runs, after a failed one too; the job fails naming the failed ones.
 #
 #   jobs:
@@ -29,11 +30,11 @@ on:
         type: boolean
         default: true
       runner:
-        description: runs-on, as JSON.
+        description: runs-on, as JSON. The default names the maintainer's self-hosted runner; other callers pass their own, for example '["ubuntu-latest"]'.
         type: string
         default: '["self-hosted", "homelab"]'
       slots:
-        description: slotfather slots the job leases, where the runner has slotfather; all holds the whole runner (the homelab runner's two 5 GiB slots).
+        description: slotfather slots the job leases, where the runner has slotfather; all holds the whole runner.
         type: string
         default: all
       slot-wait:
@@ -49,6 +50,10 @@ jobs:
     name: ${{ join(fromJSON(inputs.checks).*.name, ' + ') }}
     runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
+    # Never more than the caller grants; never more than reading the code and packages.
+    permissions:
+      contents: read
+      packages: read
     env:
       STORYBOOK_DISABLE_TELEMETRY: "1"
       GITHUB_TOKEN: ${{ github.token }}
@@ -56,8 +61,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.4.0
-      # The homelab runner has Chromium's system libraries and keeps downloaded
-      # browsers per Playwright version.
+      # The runner must provide Chromium's system libraries; a persistent
+      # self-hosted runner keeps downloaded browsers per Playwright version.
       - if: inputs.playwright
         run: bunx playwright install --no-shell chromium
       # The build and the checks run under one lease, so the build queues with

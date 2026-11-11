@@ -7,7 +7,7 @@
 // verification, including older commits whose verify has no lease of its own.
 // It works out which pushed commits have not passed before it leases, so a
 // push of verified commits takes no slot.
-// `bun install` in the worktree reads the private registry with GITHUB_TOKEN,
+// `bun install` in the worktree reads GitHub Packages with GITHUB_TOKEN,
 // or with `gh auth token` when GITHUB_TOKEN is unset.
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -118,7 +118,7 @@ export function runPrePush({ stdin = fs.readFileSync(0, "utf8"), releaseBranches
     env.GITHUB_TOKEN = token;
     if (source !== "GITHUB_TOKEN") console.log(`pre-push: GITHUB_TOKEN unset; installing with ${source}`);
   } else {
-    console.log(`pre-push: warning: GITHUB_TOKEN is unset and gh has no token; installs from the private registry will fail. ${TOKEN_HINT}`);
+    console.log(`pre-push: warning: GITHUB_TOKEN is unset and gh has no token; installs from GitHub Packages will fail. ${TOKEN_HINT}`);
   }
   // A signal lands while spawnSync waits for a step; the step ends (Ctrl-C
   // reaches its process group too), the temporary worktree is removed, and the

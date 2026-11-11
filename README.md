@@ -22,6 +22,25 @@ remain your commands. Browser/Storybook checks, package-consumer probes and rele
 Consumer commands and configuration run with the invoking account's privileges; verification is not a sandbox.
 The publisher currently expects one publishable package; changelog/release helpers also understand workspaces.
 
+## Status
+
+Repo-Kit is one maintainer's working tooling, published as a reference and case study. It verifies and releases a
+small family of the author's TypeScript libraries (a component kit, a data grid and two text utilities), each of
+which pins an exact version. Before 1.0.0 a minor release may break configuration or commands; every change is in
+the [changelog](CHANGELOG.md). Use it as is, fork it, or borrow its ideas. Issues are welcome; see
+[contributing](CONTRIBUTING.md) for what to expect.
+
+### Terms
+
+| Term | Meaning here |
+| --- | --- |
+| Consumer | A repository that installs Repo-Kit and declares its checks in `repo-kit.config.mjs`. |
+| Step / check | One command from that configuration, with its dependencies, memory and timeout. |
+| Gate | A check whose result decides something: the pre-push gate, the release gate, the TLS gate. |
+| Slot, lease | A unit of machine capacity and a running command's reservation of it, both from [Slotfather](https://github.com/maxvyshniakov/slotfather). Without Slotfather nothing is leased. |
+| Lane | Lanefather's unit of parallel work: a task with a worktree, path claims and a verification receipt. |
+| Catalog | A library's Storybook, built and deployed by the optional Storybook workflow. |
+
 ## How the tools fit
 
 | Tool | Question it answers |
@@ -40,13 +59,15 @@ A lane registration does not reserve machine capacity.
 - The GitHub CLI (`gh`) for GitHub-backed release commands; local verification can run without it.
 - GitHub authentication for GitHub Packages, remote release gates, publishing and notifications.
 - Playwright and browser system dependencies only for features that use them. Native Safari automation requires macOS.
+- Optional: [Slotfather](https://github.com/maxvyshniakov/slotfather) on `PATH` to lease machine capacity for heavy
+  commands, and Lanefather for parallel lanes. Neither is needed for verification, hooks or releases.
 
 Process supervision and managed hooks assume POSIX behavior; native Windows is not a supported workflow.
 
-Package releases currently use GitHub Packages, not the public npm registry. Installation requires authentication
-and access to the package. Repository visibility and package permissions are separate; opening this repository
-does not automatically enable anonymous package installation. This README describes the development branch;
-use the documentation at your installed version's tag when adopting a release.
+Package releases currently use GitHub Packages, not the public npm registry. GitHub Packages' npm registry requires
+a token for every install, even of a public package, and the package's own visibility is set separately from this
+repository's. This README describes the development branch; use the documentation at your installed version's tag
+when adopting a release.
 
 ## Install
 
@@ -65,7 +86,7 @@ bun add --dev --exact @maxvyshniakov/repo-kit
 ```
 
 An exact pin and lockfile keep older commits verifiable with the kit they used.
-To inspect or develop the tool from an accessible source checkout:
+To inspect or develop the tool from a source checkout:
 
 ```sh
 git clone https://github.com/maxvyshniakov/repo-kit.git
@@ -132,7 +153,7 @@ slot_env = "REPO_KIT_SLOT"
 
 With a release containing `repo-kit-lane`, run `repo-kit hooks sync` and commit the managed entry. It prepares each
 checkout's frozen dependencies, then runs that checkout's locked adapter. The first adapter version conservatively
-selects all configured normal and optional browser checks; no Data Grid, Sid-Kit or Straylight paths are built in.
+selects all configured normal and optional browser checks; no consumer-specific paths are built in.
 Lanefather records the receipt and handles integration, review and cleanup. A previously published task that never
 went through lane landing still needs separate publication reconciliation.
 
@@ -164,8 +185,9 @@ CI checks. Publishing validates the selected gate, package contents and source r
 ## Workflows
 
 Reusable verification, browser, release and catalog-deployment workflows are included. Pin the kit's release tag
-and configure the runner and token permissions for your repository. Their existing default runner labels are
-`self-hosted, homelab`; external consumers should explicitly choose an appropriate runner, for example:
+and configure the runner and token permissions for your repository. Their default runner labels,
+`self-hosted, homelab`, name the maintainer's own runner and match nothing in your repository: always pass `runner`,
+for example:
 
 ```yaml
 jobs:
@@ -178,8 +200,11 @@ jobs:
       packages: read
 ```
 
-Repo-Kit's own pull-request checks use GitHub-hosted runners. Do not run untrusted pull-request code on a private
-self-hosted machine. See [workflow inputs and browser prerequisites](docs/reference.md#workflows).
+The verification and browser jobs never hold more than `contents: read` and `packages: read`; only `release.yml`
+writes. Repo-Kit's own pull-request checks use GitHub-hosted runners. In a public repository, a pull request from a
+fork runs the workflow files of that pull request, so it can choose any runner registered to the repository: do not
+register a self-hosted runner on a public repository, or require approval for every outside contributor's workflow
+runs. See [workflow inputs and browser prerequisites](docs/reference.md#workflows) and [security](SECURITY.md).
 
 ## GITHUB_TOKEN
 
@@ -206,6 +231,8 @@ consumer pins and managed hooks. Registry publication and downstream adoption ha
 commit, so do not duplicate it immediately before pushing. See [verification](docs/agents/checks.md) and
 [repository publishing](docs/agents/publishing.md). The code uses Node's standard library without runtime dependencies;
 optional browser functionality uses the consumer's Playwright installation.
+
+[Contributing](CONTRIBUTING.md) · [Reporting a vulnerability](SECURITY.md)
 
 ## License
 

@@ -54,7 +54,7 @@ test("browser.yml builds once and runs every check after it in one job, under on
   assert.match(browser, /- run: node_modules\/\.bin\/repo-kit heavy "\$SLOTS" sh -c 'eval "\$BUILD" && node_modules\/\.bin\/repo-kit checks'\n/);
   assert.match(browser, /REPO_KIT_CHECKS: \$\{\{ inputs\.checks \}\}\n/);
   // A job per check built Storybook once per check: three builds at once broke
-  // Sid-Kit 0.41.1's checks on the homelab runner (straylight#656).
+  // Sid-Kit 0.41.1's checks on a self-hosted runner with a 10 GiB cap.
   assert.doesNotMatch(browser, /matrix:/, "one job, one build");
   assert.match(browser, /name: \$\{\{ join\(fromJSON\(inputs\.checks\)\.\*\.name, ' \+ '\) \}\}\n/, "the job is named by its checks");
   assert.doesNotMatch(browser, /- run: eval "\$BUILD"\n/, "the build must not run outside the lease");
@@ -164,4 +164,23 @@ test("public pull requests never run repo-kit's untrusted checkout on a private 
   assert.match(text, /runs-on: ubuntu-latest/);
   assert.doesNotMatch(text, /runs-on:.*self-hosted/);
   assert.match(text, /persist-credentials: false/);
+});
+
+test("every reusable job states its token permissions and no workflow uses pull_request_target", () => {
+  // A called job without permissions inherits whatever its caller granted.
+  const expected = {
+    "verify.yml": ["contents: read", "packages: read"],
+    "browser.yml": ["contents: read", "packages: read"],
+    "deploy-storybook.yml": ["contents: read", "packages: read"],
+    "release.yml": ["contents: write", "packages: write"],
+  };
+  for (const [file, scopes] of Object.entries(expected)) {
+    const text = read(path.join(workflowsDir, file));
+    const block = text.match(/\n {4}permissions:\n((?: {6}.*\n)+)/);
+    assert.ok(block, `${file}: the job declares permissions`);
+    assert.deepEqual(block[1].trim().split("\n").map(line => line.trim()), scopes, file);
+  }
+  for (const file of fs.readdirSync(workflowsDir)) {
+    assert.doesNotMatch(read(path.join(workflowsDir, file)), /pull_request_target/, file);
+  }
 });

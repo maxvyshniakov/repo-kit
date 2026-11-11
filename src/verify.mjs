@@ -108,8 +108,8 @@ function readCapacity() {
 /**
  * The memory this run may use, in GiB: REPO_KIT_VERIFY_MEMORY_GIB when set.
  * Under a slotfather lease, the leased slots times the memory slotfather gives
- * a slot (the homelab runner: 5 GiB), or no figure where slotfather budgets
- * cores only (this Mac); without a lease, what Linux reports available, or all
+ * a slot (for example 5 GiB), or no figure where slotfather budgets
+ * cores only (as on a workstation); without a lease, what Linux reports available, or all
  * memory elsewhere (macOS counts its cache as used). Always no more than the
  * job's cgroup limit (process.constrainedMemory) and, on Linux, MemAvailable.
  * Infinity: no figure, cores decide.
