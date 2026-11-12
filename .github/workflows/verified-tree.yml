@@ -26,7 +26,11 @@
 #
 # A check run counts only when GitHub Actions ran it from the caller's own
 # workflow file in the same release mode (verify.yml's --release on main and on
-# pull requests into main). Nothing from the commit runs here: no checkout,
+# pull requests into main). A tree counts as verified only for the platform it
+# was checked on: a commit status counts only when its context names the
+# `platform` (`Library checks (local, linux-x64)`, `verified-tree/linux-x64`),
+# so a green local gate on the Mac never skips the Linux run. `platform`
+# defaults to this lookup's runner; pass it when the checks run elsewhere. Nothing from the commit runs here: no checkout,
 # only GitHub's API. When GitHub cannot answer, every plan runs. Give the
 # heavy jobs `if: ${{ !cancelled() }}` and pass "" when this job failed, so a
 # failed lookup runs the checks instead of skipping them:
@@ -51,6 +55,10 @@ on:
         description: Run every plan without looking, for a manual run that must check again.
         type: boolean
         default: false
+      platform:
+        description: 'The platform the checks run on, <os>-<arch> in Node''s names (linux-x64, darwin-arm64); only results from it count. Default: this lookup runner''s.'
+        type: string
+        default: ""
       runner:
         description: runs-on, as JSON. A private repository may pass a self-hosted runner; in a public one a self-hosted label fails the job on a GitHub-hosted runner.
         type: string
@@ -62,6 +70,9 @@ on:
       tree:
         description: The commit's tree hash.
         value: ${{ jobs.lookup.outputs.tree }}
+      platform:
+        description: The platform whose results the lookup counted.
+        value: ${{ jobs.lookup.outputs.platform }}
 jobs:
   lookup:
     name: Verified tree
@@ -75,6 +86,7 @@ jobs:
     outputs:
       urls: ${{ steps.tree.outputs.urls }}
       tree: ${{ steps.tree.outputs.tree }}
+      platform: ${{ steps.tree.outputs.platform }}
     steps:
       - name: Refuse a self-hosted runner in a public repository
         if: ${{ github.event.repository.visibility == 'public' && contains(inputs.runner, 'self-hosted') }}
@@ -88,3 +100,4 @@ jobs:
           branches: ${{ inputs.branches }}
           depth: ${{ inputs.depth }}
           force: ${{ inputs.force }}
+          platform: ${{ inputs.platform }}

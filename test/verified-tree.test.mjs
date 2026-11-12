@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { accepts, findVerified, parsePlans, runVerifiedTree } from "../src/verified-tree.mjs";
+import { accepts, contextPlatform, findVerified, hostPlatform, labelsAllow, parsePlans, runVerifiedTree } from "../src/verified-tree.mjs";
 
 const REPO = "owner/library";
 const TREE = "t".repeat(40);
@@ -48,7 +48,7 @@ function github({ commits, branches = {}, statuses = {}, checkRuns = {}, failing
       return reply(200, { check_runs: (checkRuns[match[1]] ?? []).map(run => ({ app: { slug: "github-actions" }, ...run, id: jobId(run) })) });
     }
     // An Actions check run is a job of a workflow run: which workflow file, event and branch.
-    if ((match = rest.match(/^\/actions\/jobs\/(\d+)$/))) return reply(200, { id: Number(match[1]), run_id: Number(match[1]) });
+    if ((match = rest.match(/^\/actions\/jobs\/(\d+)$/))) return reply(200, { id: Number(match[1]), run_id: Number(match[1]), labels: jobs.get(Number(match[1])).labels ?? [] });
     if ((match = rest.match(/^\/actions\/runs\/(\d+)$/))) {
       const run = jobs.get(Number(match[1]));
       return reply(200, { path: ".github/workflows/check.yml", event: "push", head_branch: "main", pull_requests: [], ...run.run });
@@ -61,6 +61,8 @@ function github({ commits, branches = {}, statuses = {}, checkRuns = {}, failing
 // The workflow looking: a main push of check.yml, so verify runs with --release.
 const workflow = { path: ".github/workflows/check.yml", release: true };
 const plans = { verify: ["check / verify", "Library checks (local*"], browser: ["browser / browser + stories"] };
+// The platform the looked-up checks run on: a result counts only from the same one.
+const platform = "linux-x64";
 
 test("plans are a JSON object of names to accepted check names or status contexts", () => {
   assert.deepEqual(parsePlans('{"verify": ["check / verify"]}'), { verify: ["check / verify"] });
@@ -123,21 +125,21 @@ test("a changed plan never reuses: another check's success does not count", asyn
 });
 
 test("the local release gate's newest status counts; an older success under a newer failure does not", async () => {
-  const gate = (state, url) => ({ context: "Library checks (local, macOS)", state, target_url: url });
+  const gate = (state, url) => ({ context: "Library checks (local, linux-x64)", state, target_url: url });
   const passed = github({
     commits: { [sha("a")]: TREE, [sha("b")]: TREE },
     branches: { main: [sha("a"), sha("b")] },
     statuses: { [sha("b")]: [gate("success", "https://example.invalid/gate")] },
   });
-  const result = await findVerified({ repository: REPO, sha: sha("a"), plans, branches: ["main"], token: "token", fetcher: passed.fetcher, workflow });
-  assert.deepEqual(result.plans.verify, { sha: sha("b"), check: "Library checks (local, macOS)", url: "https://example.invalid/gate" });
+  const result = await findVerified({ repository: REPO, sha: sha("a"), plans, branches: ["main"], token: "token", fetcher: passed.fetcher, workflow, platform });
+  assert.deepEqual(result.plans.verify, { sha: sha("b"), check: "Library checks (local, linux-x64)", url: "https://example.invalid/gate" });
 
   const failedSince = github({
     commits: { [sha("a")]: TREE, [sha("b")]: TREE },
     branches: { main: [sha("a"), sha("b")] },
     statuses: { [sha("b")]: [gate("failure"), gate("success")] },
   });
-  const again = await findVerified({ repository: REPO, sha: sha("a"), plans, branches: ["main"], token: "token", fetcher: failedSince.fetcher, workflow });
+  const again = await findVerified({ repository: REPO, sha: sha("a"), plans, branches: ["main"], token: "token", fetcher: failedSince.fetcher, workflow, platform });
   assert.equal(again.plans.verify, null);
 });
 
@@ -145,9 +147,9 @@ test("a status without a link points at the commit", async () => {
   const { fetcher } = github({
     commits: { [sha("a")]: TREE, [sha("b")]: TREE },
     branches: { main: [sha("a"), sha("b")] },
-    statuses: { [sha("b")]: [{ context: "Library checks (local, macOS)", state: "success", target_url: null }] },
+    statuses: { [sha("b")]: [{ context: "Library checks (local, linux-x64)", state: "success", target_url: null }] },
   });
-  const result = await findVerified({ repository: REPO, sha: sha("a"), plans, branches: ["main"], token: "token", fetcher, workflow });
+  const result = await findVerified({ repository: REPO, sha: sha("a"), plans, branches: ["main"], token: "token", fetcher, workflow, platform });
   assert.equal(result.plans.verify.url, `https://github.com/${REPO}/commit/${sha("b")}`);
 });
 
@@ -191,6 +193,67 @@ test("depth bounds how many commits of each branch are compared", async () => {
   assert.deepEqual(calls.filter(url => url.includes("/commits?")).map(url => new URL(url).searchParams.get("page")), ["1", "2"]);
 });
 
+test("a tree is verified only for the platform it was checked on: a Mac result never stands for Linux", async () => {
+  const lookup = async (context, asking) => {
+    const { fetcher } = github({
+      commits: { [sha("a")]: TREE, [sha("b")]: TREE },
+      branches: { main: [sha("a"), sha("b")] },
+      statuses: { [sha("b")]: [{ context, state: "success", target_url: "gate" }] },
+    });
+    const accepting = { verify: ["Library checks (local*", "verified-tree/*"] };
+    return (await findVerified({ repository: REPO, sha: sha("a"), plans: accepting, branches: ["main"], token: "token", fetcher, workflow, platform: asking })).plans.verify;
+  };
+  const rows = [
+    // [status context, platform asking, reused]
+    ["Library checks (local, darwin-arm64)", "darwin-arm64", true],  // same platform: the second run is skipped
+    ["Library checks (local, darwin-arm64)", "linux-x64", false],    // the Mac gate does not excuse the Linux run
+    ["Library checks (local, linux-arm64)", "linux-x64", false],     // nor does another architecture
+    ["Library checks (local, linux-x64)", "linux-x64", true],
+    ["verified-tree/linux-x64", "linux-x64", true],
+    ["verified-tree/linux-x64", "darwin-arm64", false],
+    ["Library checks (local, macOS)", "darwin-arm64", false],        // repo-kit 0.6.0 and older named no architecture
+    ["Library checks (local, Linux)", "linux-x64", false],
+  ];
+  for (const [context, asking, reused] of rows) assert.equal(Boolean(await lookup(context, asking)), reused, `${context} asked from ${asking}`);
+});
+
+test("a status context names its platform at its end, after a slash or in the gate's parentheses", () => {
+  assert.equal(contextPlatform("Library checks (local, darwin-arm64)"), "darwin-arm64");
+  assert.equal(contextPlatform("verified-tree/linux-x64"), "linux-x64");
+  assert.equal(contextPlatform("Library checks (local, macOS)"), null);
+  assert.equal(contextPlatform("check / verify"), null);
+  assert.equal(contextPlatform("deploy"), null);
+});
+
+test("a check run counts only when its job's runner labels do not name another platform", async () => {
+  const table = [
+    // [labels, platform asking, allowed]
+    [[], "linux-x64", true],
+    [["self-hosted", "homelab"], "linux-x64", true],          // the same workflow file at the same tree: its runner
+    [["ubuntu-latest"], "linux-x64", true],
+    [["ubuntu-latest"], "darwin-arm64", false],
+    [["ubuntu-24.04-arm"], "linux-x64", false],
+    [["ubuntu-24.04-arm"], "linux-arm64", true],
+    [["macos-15"], "linux-x64", false],
+    [["self-hosted", "Linux", "X64"], "linux-x64", true],
+    [["self-hosted", "macOS", "ARM64"], "linux-x64", false],
+    [["self-hosted", "Linux", "ARM64"], "linux-x64", false],
+    [["windows-latest"], "win32-x64", true],
+  ];
+  for (const [labels, asking, allowed] of table) assert.equal(labelsAllow(labels, asking), allowed, `${labels} for ${asking}`);
+  const { fetcher } = github({
+    commits: { [sha("a")]: TREE, [sha("b")]: TREE },
+    branches: { main: [sha("a"), sha("b")] },
+    checkRuns: { [sha("b")]: [{ name: "check / verify", conclusion: "success", html_url: "x", labels: ["macos-15"] }] },
+  });
+  const result = await findVerified({ repository: REPO, sha: sha("a"), plans, branches: ["main"], token: "token", fetcher, workflow, platform });
+  assert.equal(result.plans.verify, null);
+});
+
+test("the host platform is Node's <os>-<arch>", () => {
+  assert.equal(hostPlatform(), `${process.platform}-${process.arch}`);
+});
+
 function outputs(env) {
   return Object.fromEntries(fs.readFileSync(env.GITHUB_OUTPUT, "utf8").trim().split("\n").map(line => line.split(/=(.*)/s).slice(0, 2)));
 }
@@ -215,7 +278,9 @@ test("in a workflow it writes the urls output and a summary line per plan", asyn
   assert.equal(await runVerifiedTree(env, fetcher), 0);
   assert.deepEqual(JSON.parse(outputs(env).urls), { verify: "https://github.com/owner/library/runs/1", browser: "" });
   assert.equal(outputs(env).tree, TREE);
+  assert.equal(outputs(env).platform, hostPlatform());
   const summary = fs.readFileSync(env.GITHUB_STEP_SUMMARY, "utf8");
+  assert.match(summary, new RegExp(`for ${hostPlatform()}`));
   assert.match(summary, /verify: reused: .*check \/ verify.*bbbbbbb.*runs\/1/);
   assert.match(summary, /browser: runs: no passed result/);
 });
@@ -264,6 +329,22 @@ test("outside a release-mode run, only results without --release count", async (
   });
   const result = await findVerified({ repository: REPO, sha: sha("a"), plans, branches: ["dev"], token: "token", fetcher, workflow: { ...workflow, release: false } });
   assert.ok(result.plans.verify);
+});
+
+test("REPO_KIT_PLATFORM names the platform the checks run on, and a malformed one fails the step", async () => {
+  const { fetcher } = github({
+    commits: { [sha("a")]: TREE, [sha("b")]: TREE },
+    branches: { main: [sha("a")], dev: [sha("b")] },
+    statuses: { [sha("b")]: [{ context: "Library checks (local, darwin-arm64)", state: "success", target_url: "gate" }] },
+  });
+  const linux = actionEnv({ REPO_KIT_PLATFORM: "linux-x64" });
+  assert.equal(await runVerifiedTree(linux, fetcher), 0);
+  assert.deepEqual(JSON.parse(outputs(linux).urls), { verify: "", browser: "" });
+  assert.equal(outputs(linux).platform, "linux-x64");
+  const mac = actionEnv({ REPO_KIT_PLATFORM: "darwin-arm64" });
+  assert.equal(await runVerifiedTree(mac, fetcher), 0);
+  assert.equal(JSON.parse(outputs(mac).urls).verify, "gate");
+  assert.equal(await runVerifiedTree(actionEnv({ REPO_KIT_PLATFORM: "Linux" }), async () => assert.fail("no request")), 1);
 });
 
 test("force runs every plan without asking GitHub", async () => {

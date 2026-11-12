@@ -11,7 +11,7 @@
 // declares browser checks, with every Playwright Chromium started with software
 // compositing (chromium.mjs), as on the Linux CI runner. The TLS gate runs
 // first. The result goes to GitHub as the commit status "Library checks
-// (local, <platform>)", with a short summary that names the local log
+// (local, <os>-<arch>)" (darwin-arm64: verified-tree counts it only for that platform), with a short summary that names the local log
 // (.git/repo-kit-gate/<sha>.log). A commit that passed is recorded in
 // .git/repo-kit-gate/passed and is not run again; the next run only records the
 // status it could not (a commit GitHub did not have yet). --rerun runs it
@@ -47,8 +47,12 @@ export function releaseGate(config) {
   return gate;
 }
 
-export function localContext(platform = process.platform) {
-  return `${CONTEXT_PREFIX}, ${PLATFORM_NAMES[platform] ?? platform})`;
+/**
+ * The gate's status context names the platform that ran it, `<os>-<arch>`, as
+ * verified-tree reads it: a tree counts as verified only for that platform.
+ */
+export function localContext(platform = process.platform, arch = process.arch) {
+  return `${CONTEXT_PREFIX}, ${platform}-${arch})`;
 }
 
 /**
@@ -235,6 +239,7 @@ export async function runReleaseGate(config, args = [], deps = {}) {
     tls = () => runTlsGate({ env }),
     lease = leaseSelf,
     platform = process.platform,
+    arch = process.arch,
     host = os.hostname().split(".")[0],
     softwareChromium: prepareChromium = softwareChromium,
     tokenSource,
@@ -252,7 +257,7 @@ export async function runReleaseGate(config, args = [], deps = {}) {
   const logFile = path.join(recordDir, `${short}.log`);
   const logLabel = path.relative(path.dirname(gitDir), logFile);
   const gate = releaseGate(config);
-  const context = localContext(platform);
+  const context = localContext(platform, arch);
   const { token, source } = tokenSource ? { token: tokenSource() } : resolveToken(env);
   const repository = () => githubRepository(git("remote", "get-url", "origin"));
   const fail = lines => {

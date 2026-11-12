@@ -185,7 +185,7 @@ Re-measure after a change that adds tests or stories; a peak above its declared 
 | `check-changelog-entries <base>..<head>` | The [changelog-entry guard](#changelog-entries) on every commit of the range. Without `changelog.paths`, nothing. |
 | `commit-msg <message file>` | Runs from `.githooks/commit-msg`: the same guard on the commit being made. Skip once with `git commit --no-verify`. |
 | `release [<package>:]<patch\|minor\|major\|x.y.z> [--date=]` | Cuts `## Unreleased` into a version; sets `package.json` (or `pyproject.toml`), `bun.lock` and the quick start. |
-| `release-gate [<ref>] [--rerun] [--no-attest]` | The local [release gate](#release-gate) on a commit (default `HEAD`): a clean worktree, frozen install, `verify --release`, `verify --browser` with Chromium in software compositing, the TLS gate; records the commit status `Library checks (local, <platform>)`. `--mode` prints `release.gate`. |
+| `release-gate [<ref>] [--rerun] [--no-attest]` | The local [release gate](#release-gate) on a commit (default `HEAD`): a clean worktree, frozen install, `verify --release`, `verify --browser` with Chromium in software compositing, the TLS gate; records the commit status `Library checks (local, <os>-<arch>)`, such as `(local, darwin-arm64)`. `--mode` prints `release.gate`. |
 | `ci-gate` | In a workflow job that needs the checks (`deploy-storybook.yml`): writes `run=true` under gate `local`, or under gate `ci` when every job in `REPO_KIT_NEEDS` (the caller's `toJSON(needs)`) passed. |
 | `publish [--resume]` | TLS gate; HEAD must be `origin/main` by SHA (any branch, worktree or detached HEAD); the [release gate](#release-gate) on that commit: a passed `release-gate` status (gate `local`) or the checks workflow (gate `ci`), not inside Actions; publishes, checks the registry serves the version, tags `v<version>` (GH007 recovery printed when the tag push is declined), then requests `publish.notify`. `--resume` finishes a partial publication. |
 | `notify` | Requests `publish.notify`'s workflows again. |
@@ -506,7 +506,8 @@ bun run release:publish
 5. `bun run verify -- --browser` when the commit's config declares `verify.browser`. The gate fails if that starts no
    Chromium through the mirror, and fails if the commit declares browser checks but has no Playwright.
 
-On a pass it records the commit status `Library checks (local, macOS)` with a summary: host, duration, kit version,
+On a pass it records the commit status `Library checks (local, darwin-arm64)` (the gate's `<os>-<arch>`, in Node's
+names; repo-kit 0.6.0 and older wrote `(local, macOS)`) with a summary: host, duration, kit version,
 the number of software-compositing Chromium launches, and the local log, `.git/repo-kit-gate/<sha>.log`. A failure
 records `failure`. Without a token with `repo` scope it refuses to start.
 
@@ -546,7 +547,7 @@ a caller left as before still deploys only after its checks passed. A deploy cou
 the runner out of the release path entirely; it is not wired up.
 
 Repo-Kit does not need branch protection or a ruleset: the commit statuses are the record and `publish` the
-enforcement. If a repository enables protection, require `Library checks (local, macOS)` under gate `local`, or the
+enforcement. If a repository enables protection, require `Library checks (local, darwin-arm64)` under gate `local`, or the
 `check.yml` jobs under gate `ci`, not both.
 
 ## GITHUB_TOKEN
@@ -625,7 +626,7 @@ jobs:
 | `browser.yml` | `checks` (JSON list of `{name, run}`), `build`, `playwright` (true), `slots` (`all`: the build and every check lease them together), `slot-wait` (0), `runner`, `timeout-minutes` (45: the wait, the build and every check), `verified-url`, `junit`, `junit-artifact` |
 | `deploy-storybook.yml` | `url`, `needs` (the caller's `toJSON(needs)`, for `repo-kit ci-gate`; default `{}`), `environment` (`storybook`), `runner`, `slots` (`all`, for the builds and `storybook:prepare-deploy`), `slot-wait` (0), `timeout-minutes` (30); `STORYBOOK_CLOUDFLARE_API_TOKEN` from that environment, with `secrets: inherit` |
 | `release.yml` | `command` (`bun run release:publish`), `enabled` (true), `slots` (`all`), `slot-wait` (0), `runner`, `timeout-minutes` (30); the caller grants `contents: write`, `packages: write` |
-| `verified-tree.yml` | `plans` (required), `branches` (`["main", "dev"]`), `depth` (100), `force` (false), `runner`; output `urls`; the caller grants `contents: read`, `checks: read`, `statuses: read`, `actions: read` to this job |
+| `verified-tree.yml` | `plans` (required), `branches` (`["main", "dev"]`), `depth` (100), `force` (false), `platform` (the lookup runner's), `runner`; outputs `urls`, `tree`, `platform`; the caller grants `contents: read`, `checks: read`, `statuses: read`, `actions: read` to this job |
 
 `runner` is `runs-on` as JSON and defaults to `'["ubuntu-latest"]'`. A private repository may name a self-hosted
 runner, for example `'["self-hosted", "homelab"]'`. When the caller's repository is public and `runner` contains
@@ -658,14 +659,21 @@ main. `verified-tree.yml` looks for such a result before the heavy jobs start:
    `branches`, the commit itself and a pull request's head.
 2. On each commit with that tree it reads the check runs (the jobs of earlier workflow runs, named
    `<caller job> / <job>`) and the commit statuses (the newest per context, such as the local release gate's
-   `Library checks (local, macOS)`).
+   `Library checks (local, darwin-arm64)`).
 3. `plans` maps each plan name to the check names or status contexts that count as passing it; a trailing `*`
    accepts a prefix. A plan reuses the first success it accepts. A plan whose checks changed never matches,
    because a renamed or added check changes the job name (`browser.yml`'s job is named by its checks joined with
    ` + `, so `[{"name": "stories"}]` runs as `browser / stories`).
    A check run counts only when GitHub Actions ran it from the caller's own workflow file in the same release
    mode: `verify.yml` adds `--release` on `main` and on pull requests into `main`, so a pull request into `dev`
-   never verifies a main push. A commit status counts by its context alone.
+   never verifies a main push.
+   The platform is part of the plan: a tree counts as verified only for the OS and architecture it was checked on
+   (`platform`, `<os>-<arch>` in Node's names, by default the lookup runner's). A commit status counts only when its
+   context ends with that platform, after a slash (`verified-tree/linux-x64`) or in the local gate's parentheses
+   (`Library checks (local, linux-x64)`); a context naming no platform, such as the `(local, macOS)` of repo-kit
+   0.6.0 and older, counts for none. A check run counts unless its job's runner labels name another OS or
+   architecture (`ubuntu-*`, `macos-*`, `windows-*`, `Linux`, `macOS`, `X64`, `ARM64`, `*-arm`). A green local gate
+   on the Mac therefore never skips the Linux run, and a second run of the tree on the same platform is skipped.
 4. The `urls` output maps each plan to that result's link, or `""`. `verify.yml` and `browser.yml` take it as
    `verified-url`: when it is set the job runs no step but one, which links the reused result in the job summary,
    and the job passes. Give those jobs `if: ${{ !cancelled() }}` and
@@ -675,10 +683,11 @@ main. `verified-tree.yml` looks for such a result before the heavy jobs start:
 
 The lookup checks nothing out and installs nothing: `actions/verified-tree` runs `src/verified-tree.mjs` with
 Node against GitHub's API. When GitHub cannot answer, every plan runs. `repo-kit verified-tree` is the same step
-for a job of your own (`REPO_KIT_PLANS`, `REPO_KIT_BRANCHES`, `REPO_KIT_DEPTH`, `REPO_KIT_HEAD_SHA`, `GITHUB_TOKEN`).
+for a job of your own (`REPO_KIT_PLANS`, `REPO_KIT_BRANCHES`, `REPO_KIT_DEPTH`, `REPO_KIT_HEAD_SHA`,
+`REPO_KIT_PLATFORM`, `GITHUB_TOKEN`).
 
-The runner is outside the tree too: a local gate status ran `verify --release` and the browser checks on macOS.
-Leave the local gate out of a plan when you want its Linux run on every tree.
+The runner is outside the tree too, which is why the platform is part of the plan: a local gate status on the Mac
+stands only for a lookup whose `platform` is the Mac's.
 
 ### Triggers: fast checks on main, the full suite nightly and on release
 

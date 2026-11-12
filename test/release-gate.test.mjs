@@ -48,9 +48,10 @@ test("gate ci keeps publish's old decisions exactly; gate local asks for the att
   assert.equal(publishGatePlan({ gate: "local", checks: "check.yml", inActions: true }), "actions");
 });
 
-test("the attestation is a commit status named by the platform that ran the gate", () => {
-  assert.equal(localContext("darwin"), "Library checks (local, macOS)");
-  assert.equal(localContext("linux"), "Library checks (local, Linux)");
+test("the attestation is a commit status named by the platform that ran the gate, OS and architecture", () => {
+  assert.equal(localContext("darwin", "arm64"), "Library checks (local, darwin-arm64)");
+  assert.equal(localContext("linux", "x64"), "Library checks (local, linux-x64)");
+  assert.equal(localContext(), `Library checks (local, ${process.platform}-${process.arch})`);
 });
 
 test("publish reads the newest local gate status on the commit and ignores other contexts", () => {
@@ -163,7 +164,7 @@ esac
   // The pre-push hook runs these tests under its own lease; a browsers path
   // could be set too. Neither may reach the gate under test.
   for (const name of ["SLOTFATHER_LEASE", "SLOTFATHER_COUNT", "PLAYWRIGHT_BROWSERS_PATH"]) delete env[name];
-  const deps = (extra = {}) => ({ env, fetch, tls: () => true, lease: async () => false, platform: "darwin", host: "test-mac", softwareChromium: async () => undefined, ...extra });
+  const deps = (extra = {}) => ({ env, fetch, tls: () => true, lease: async () => false, platform: "darwin", arch: "arm64", host: "test-mac", softwareChromium: async () => undefined, ...extra });
   const ran = () => {
     const lines = fs.existsSync(log) ? fs.readFileSync(log, "utf8").split("\n").filter(Boolean).map(line => line.trimEnd()) : [];
     fs.rmSync(log, { force: true });
@@ -194,7 +195,7 @@ test("the gate verifies the exact commit in a clean worktree and records a passe
     assert.equal(posts.length, 1);
     assert.equal(posts[0].url, `https://api.github.com/repos/maxvyshniakov/example/statuses/${fixture.sha}`);
     assert.equal(posts[0].body.state, "success");
-    assert.equal(posts[0].body.context, "Library checks (local, macOS)");
+    assert.equal(posts[0].body.context, "Library checks (local, darwin-arm64)");
     assert.match(posts[0].body.description, new RegExp(`^Passed on test-mac \\(macOS\\).*log \\.git/repo-kit-gate/${fixture.sha.slice(0, 12)}\\.log`));
     // The log holds what ran.
     const log = fs.readFileSync(path.join(fixture.root, ".git/repo-kit-gate", `${fixture.sha.slice(0, 12)}.log`), "utf8");

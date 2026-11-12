@@ -44,7 +44,10 @@ jobs:
       # Plan name -> the check runs (`<caller job> / <job name>`; browser.yml's
       # job is named by its checks, joined with " + ") or commit statuses that
       # count as the same checks on the same tree. The local release gate runs
-      # verify --release and the browser checks, so it counts for both.
+      # verify --release and the browser checks, so it counts for both, but
+      # only on the platform it ran on: the lookup counts a result only from
+      # its own runner's platform (or `platform`), so a Mac gate never skips
+      # this Linux run.
       plans: >-
         {"verify": ["check / verify", "Library checks (local*"],
          "browser": ["browser / stories", "Library checks (local*"]}

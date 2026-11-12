@@ -6,6 +6,9 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ### Breaking
 
+- A tree counts as verified only for the platform it was checked on (owner decision 2026-11-13). `verified-tree.yml`, `actions/verified-tree` and `repo-kit verified-tree` take `platform` (`REPO_KIT_PLATFORM`; `<os>-<arch>` in Node's names, by default the lookup runner's) and count a commit status only when its context ends with that platform (`verified-tree/linux-x64`, `Library checks (local, linux-x64)`), and a check run only when its job's runner labels name no other OS or architecture; a new `platform` output says which platform counted. A green local gate on the Mac no longer skips a Linux run; a second run of the tree on the same platform still does. A status context naming no platform, such as the `Library checks (local, macOS)` of 0.6.0 and older, counts for none.
+- The local release gate's commit status names OS and architecture: `Library checks (local, darwin-arm64)` instead of `Library checks (local, macOS)`. `publish` accepts either; a branch protection rule requiring the old context needs the new one.
+
 - The optional Playwright peer is `>=1.57.0`, the first release that launches the `moz-firefox` channel `shoot --browser=firefox` uses.
 
 ### Fixed

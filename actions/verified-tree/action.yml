@@ -17,6 +17,9 @@ inputs:
   force:
     description: '"true" runs every plan without looking.'
     default: "false"
+  platform:
+    description: 'The platform the checks run on, <os>-<arch> in Node''s names (linux-x64); only results from it count. Default: this runner''s.'
+    default: ""
   token:
     description: Token reading commits, check runs, commit statuses and workflow runs.
     default: ${{ github.token }}
@@ -27,6 +30,9 @@ outputs:
   tree:
     description: The commit's tree hash.
     value: ${{ steps.lookup.outputs.tree }}
+  platform:
+    description: The platform whose results the lookup counted.
+    value: ${{ steps.lookup.outputs.platform }}
 runs:
   using: composite
   steps:
@@ -38,5 +44,6 @@ runs:
         REPO_KIT_BRANCHES: ${{ inputs.branches }}
         REPO_KIT_DEPTH: ${{ inputs.depth }}
         REPO_KIT_FORCE: ${{ inputs.force }}
+        REPO_KIT_PLATFORM: ${{ inputs.platform }}
         REPO_KIT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         GITHUB_TOKEN: ${{ inputs.token }}
