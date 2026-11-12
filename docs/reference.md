@@ -170,6 +170,63 @@ Re-measure after a change that adds tests or stories; a peak above its declared 
 | `tls` | The TLS gate (below). |
 | `packed-consumer [--keep]` | Packs, installs into a temporary consumer, imports every entrypoint in plain Node, type-checks under `nodenext` without `skipLibCheck`, then runs the probes. Optional peers are not installed. |
 | `shoot <story id filter...> [<url>\|--url=] [--theme=] [--width=] [--browser=] [--out=] [--viewport]` | [Story screenshots](#story-screenshots) from a running Storybook, under a lease of `shoot.slots`. |
+| `test-hygiene [--init\|--update]` | [Shrink-only test rules](#test-hygiene): fixed sleeps, timing assertions outside the perf suite and, opt-in, class-name and CSS-text assertions. Runs without `repo-kit.config.mjs` too. |
+| `verified-tree` | In a workflow: links each `REPO_KIT_PLANS` plan to a passed result of the same tree ([skipping a verified tree](#skipping-a-verified-tree)). |
+
+## Test hygiene
+
+`repo-kit test-hygiene` scans the test files Git tracks (or would track) and counts, per rule and file:
+
+| Rule | Finds | Allowed |
+|---|---|---|
+| `fixed-sleep` | `waitForTimeout(...)` and Python's `wait_for_timeout(...)` whatever the argument; a `new Promise(resolve => setTimeout(resolve, <n or NAME>))`, `sleep(<n>)`, `delay(<n>)` and `Bun.sleep(<n>)` of 50 ms or more; Python `time.sleep(<n>)`/`asyncio.sleep(<n>)` of 0.2 s or more; `Thread.sleep`, `Task.sleep`, a bare `sleep`/`usleep`, `runMain(for:)`, `thread::sleep` | a `sleep-ok: <reason>` comment on the line or right above it |
+| `timing-assert` | an assertion bounding a measured duration from above: `assert.ok(Date.now() - started < 2000)`, `expect(elapsed).toBeLessThan(100)` (or chai's `below`, `lessThan`, `most`), `self.assertLess(elapsed, 0.2)` (ported from Straylight's `tools/perf-budget-check.py`; also Swift and Rust) | a budget through `perfBudget` / `perf_budget`; a deadline with a literal bound of at least 30 s, or a tighter one with a `load-tolerant: <why>` comment |
+| `ui-assertion` (opt-in) | `toHaveClass(...)`, an asserted `.className` or `classList`, a string holding a CSS declaration (`"color: var(--x);"`) in an assertion | roles, states and data attributes |
+
+Only the helper exempts an assertion, in the perf suite as anywhere. Each file calling it must match `perfSuite`, or its
+budgets never hold: that fails outright. The perf suite is the repository's own command: it runs those files alone,
+with `REPO_KIT_PERF_BUDGETS=enforce`, and the ordinary test command leaves them out.
+
+The counts live in a baseline (`test-hygiene-baseline.json`) and only shrink:
+
+- `repo-kit test-hygiene --init` writes today's counts; it never overwrites a baseline.
+- The check fails when a file gains a finding or a new file has one, naming each line.
+- It fails when a count went down and the baseline still holds the old one: `--update` lowers it (and never raises).
+- Compared with the baseline of the base commit, no entry may rise: `REPO_KIT_HYGIENE_BASE`, else where `HEAD` left
+  `origin/HEAD` or `origin/main`, else `HEAD`'s parent on that branch itself. An entry may move with its file: the
+  entries of files that no longer exist can be given to new paths.
+- Counts are per file, so one wait can replace another in the same file; the lines are printed when a count grows.
+
+```js
+// repo-kit.config.mjs, all optional
+testHygiene: {
+  baseline: "test-hygiene-baseline.json",
+  tests: ["**/*.{test,spec}.{js,mjs,cjs,ts,tsx,jsx,mts,cts}", "test/**/*.{js,mjs,cjs,ts,tsx,py}", "tests/**/*.{js,mjs,cjs,ts,tsx,py,rs,swift}", /* ... */],
+  exclude: ["**/node_modules/**", "**/dist/**", "**/fixtures/**"],
+  perfSuite: ["**/*.perf.{js,mjs,ts,tsx}", "**/perf/**", "**/test_perf_*.py", "**/*perf*.test.*"],
+  ui: true,                                  // adds ui-assertion (unit tests: keep end-to-end tests out of `tests`)
+  // rules: ["fixed-sleep", "timing-assert", "ui-assertion"],  // or name them
+},
+```
+
+`perfBudget(holds, message)` from `@maxvyshniakov/repo-kit/perf-budget` states a budget: under
+`REPO_KIT_PERF_BUDGETS=enforce`, which the perf suite sets when it runs alone on a quiet machine, a missed budget
+fails; elsewhere it is reported and the test goes on. A Python or Swift repository defines `perf_budget` /
+`perfBudget` beside its tests with the same contract.
+
+### Adopting it
+
+Nothing runs until a repository adds the step, so a release of the kit turns no gate red. Run
+`repo-kit test-hygiene --init`, commit the baseline, then add the check to the gate:
+
+- **Sid-Kit and Data Grid:** a verify step `{ name: "test hygiene", command: ["run", "repo-kit", "test-hygiene"] }`
+  (or a `check:hygiene` script) and `testHygiene: { ui: true }`. Measured on 2026-11-12: Sid-Kit 2 fixed sleeps,
+  2 timing assertions and 757 UI assertions in 239 test files; Data Grid 0, 0 and 87 in 229. Their perf scripts
+  (`perf:*`, run under a whole-machine lease) belong in `perfSuite`.
+- **fathers** (Python, no `repo-kit.config.mjs`): `bunx @maxvyshniakov/repo-kit test-hygiene` from the repository
+  root in `tools/check.py`, or a CI step. Measured: 23 fixed sleeps and 9 timing assertions in 85 test files,
+  among them godfather's four `assertLess(time.monotonic() - started, ...)`.
+- A scan of a few hundred test files takes 0.1–0.5 s.
 
 ## Changelog entries
 

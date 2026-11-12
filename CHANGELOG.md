@@ -8,6 +8,8 @@ Versions and release rules: [README.md](README.md#versioning).
 
 - `verified-tree.yml` and `actions/verified-tree` (also `repo-kit verified-tree`): before the heavy jobs, look up a passed check run or commit status, accepted by a plan, on any commit with the same tree (the newest commits of main and dev, the commit itself, a pull request's head). Its `urls` output feeds the new `verified-url` input of `verify.yml` and `browser.yml`, which then skip every step and link the reused result. Opt-in: callers that do not add the job run as before.
 - `verify.yml` and `browser.yml` take `junit` (and `junit-artifact`) to upload the JUnit reports their commands write; `repo-kit checks` writes per-check results and times as JUnit to `REPO_KIT_CHECKS_JUNIT`, which `browser.yml` uploads with them.
+- `repo-kit test-hygiene [--init|--update]`: shrink-only rules over test files with a baseline (`test-hygiene-baseline.json`): fixed sleeps (`sleep-ok: <reason>` allows one), timing assertions outside the perf suite (ported from Straylight's perf budget check; a perf-helper caller outside the perf suite fails), and opt-in class-name and CSS-text assertions (`testHygiene.ui`). It runs only where a repository adds it, and without `repo-kit.config.mjs` too.
+- `@maxvyshniakov/repo-kit/perf-budget`: `perfBudget(holds, message)` fails only under `REPO_KIT_PERF_BUDGETS=enforce` (the perf suite) and reports elsewhere.
 - `docs/templates/check.yml`: a caller running fast checks on main pushes, the full suite nightly and on release tags, skipping docs-only changes and verified trees.
 
 ### Changed

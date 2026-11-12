@@ -9,6 +9,8 @@ const VERSIONED_FILES = [".github/workflows", "README.md", "docs/reference.md", 
 
 export default {
   prePush: { releaseBranches: [] },
+  // The rules' own test holds their examples and calls perfBudget to test it.
+  testHygiene: { exclude: ["**/node_modules/**", "test/test-hygiene.test.mjs"] },
   verify: {
     // Its steps take seconds; a hung one fails well inside check.yml's 15 minutes.
     stepTimeout: 5,
@@ -16,6 +18,7 @@ export default {
       { name: "changelogs", command: ["run", "check:changelogs", ...(release ? ["--", "--release"] : [])] },
       { name: "kit check", command: ["run", "check"] },
       { name: "upstream hook", command: ["run", "check:upstream"] },
+      { name: "test hygiene", command: ["run", "check:hygiene"] },
       { name: "tests", command: ["run", "test"] },
       { name: "packed consumer", command: ["run", "check:consumer"] },
     ],

@@ -16,6 +16,7 @@
     ".": "./src/index.mjs",
     "./changelog": "./src/changelog.mjs",
     "./packed-consumer": "./src/packed-consumer.mjs",
+    "./perf-budget": "./src/perf-budget.mjs",
     "./publish": "./src/publish.mjs",
     "./release": "./src/release.mjs",
     "./shoot": "./src/shoot.mjs",
@@ -49,6 +50,7 @@
     "check:changelogs": "node src/cli.mjs check-changelogs",
     "check:consumer": "node src/cli.mjs packed-consumer",
     "check:upstream": "node scripts/check-upstream.mjs",
+    "check:hygiene": "node src/cli.mjs test-hygiene",
     "release": "node src/cli.mjs release",
     "release:publish": "node src/cli.mjs publish",
     "repo-kit": "node src/cli.mjs"

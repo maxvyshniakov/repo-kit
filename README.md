@@ -197,6 +197,7 @@ went through lane landing still needs separate publication reconciliation.
 | Verify an exact release revision | `repo-kit release-gate <ref>` |
 | Publish that verified revision | `repo-kit publish` |
 | Capture a catalog story | `repo-kit shoot` |
+| Keep fixed sleeps and timing asserts out of tests, shrink-only | `repo-kit test-hygiene` |
 
 [Full command reference](docs/reference.md#commands) · [Story screenshots](docs/reference.md#story-screenshots)
 

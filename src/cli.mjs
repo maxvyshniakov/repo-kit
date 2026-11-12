@@ -12,6 +12,7 @@ const USAGE = `Usage: repo-kit <command>
                                    screenshot Storybook stories, under a lease of shoot.slots
   checks                           run REPO_KIT_CHECKS' list of {name, run} in order, as browser.yml does
   verified-tree                    in a workflow: link each REPO_KIT_PLANS plan to a passed result of this tree
+  test-hygiene [--init|--update]   shrink-only test rules: fixed sleeps, timing assertions, UI assertions (opt-in)
   hooks <install|sync|check|status>
   check                            managed hooks, workflow references and packageManager match the kit
   check-changelogs [--release]
@@ -42,6 +43,23 @@ export async function main([command, ...args]) {
   if (command === "verified-tree") {
     const { runVerifiedTree } = await import("./verified-tree.mjs");
     return runVerifiedTree();
+  }
+  if (command === "test-hygiene") {
+    // A repository without repo-kit.config.mjs (a Python one, say) gets the defaults.
+    const [{ findRoot, loadConfig }, { runTestHygiene }] = await Promise.all([import("./config.mjs"), import("./test-hygiene.mjs")]);
+    let root = null;
+    try {
+      root = findRoot();
+    } catch {
+      // No repo-kit.config.mjs: the repository's defaults. A broken config still fails below.
+    }
+    let config;
+    if (root) config = await loadConfig(root);
+    else {
+      const { execFileSync } = await import("node:child_process");
+      config = { root: execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim() };
+    }
+    return runTestHygiene({ root: config.root, config, args });
   }
   if (command === "tls") {
     const { runTlsGate } = await import("./tls.mjs");

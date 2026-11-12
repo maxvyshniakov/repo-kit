@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "rules": {
+    "fixed-sleep": {
+      "test/kit.test.mjs": 1,
+      "test/verify.test.mjs": 5
+    },
+    "timing-assert": {
+      "test/verify.test.mjs": 1
+    }
+  }
+}
