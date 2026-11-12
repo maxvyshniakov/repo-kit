@@ -211,16 +211,15 @@ CI checks. Publishing validates the selected gate, package contents and source r
 ## Workflows
 
 Reusable verification, browser, release and catalog-deployment workflows are included. Pin the kit's release tag
-and configure the runner and token permissions for your repository. Their default runner labels,
-`self-hosted, homelab`, name the maintainer's own runner and match nothing in your repository: always pass `runner`,
-for example:
+and configure the token permissions for your repository. They run on GitHub-hosted `ubuntu-latest` unless the
+caller passes `runner`; a private repository may pass a self-hosted runner, for example
+`runner: '["self-hosted", "homelab"]'`. In a public repository a self-hosted label fails the job on a GitHub-hosted
+runner before anything is checked out:
 
 ```yaml
 jobs:
   check:
     uses: maxvyshniakov/repo-kit/.github/workflows/verify.yml@v0.5.0
-    with:
-      runner: '["ubuntu-latest"]'
     permissions:
       contents: read
       packages: read

@@ -190,3 +190,21 @@ test("every reusable job states its token permissions and no workflow uses pull_
     assert.doesNotMatch(read(path.join(workflowsDir, file)), /pull_request_target/, file);
   }
 });
+
+const publicSelfHosted = "github.event.repository.visibility == 'public' && contains(inputs.runner, 'self-hosted')";
+
+test("reusable workflows default to a GitHub-hosted runner and refuse a self-hosted one in a public repository", () => {
+  for (const file of reusable) {
+    const text = read(path.join(workflowsDir, file));
+    // A public caller relying on the default must never reach a private runner.
+    assert.match(text, /\n      runner:\n(?: {8}.*\n)*? {8}default: '\["ubuntu-latest"\]'\n/, `${file}: runner defaults to ubuntu-latest`);
+    assert.doesNotMatch(text, /default: '\["self-hosted"/, file);
+    // A public repository passing a self-hosted label lands on a GitHub-hosted runner and fails there.
+    assert.ok(text.includes(`runs-on: \${{ ${publicSelfHosted} && fromJSON('["ubuntu-latest"]') || fromJSON(inputs.runner) }}`), `${file}: runs-on swaps a public self-hosted request`);
+    const steps = text.slice(text.indexOf("\n    steps:\n"));
+    const first = steps.split("\n      - ")[1];
+    assert.match(first, /^name: Refuse a self-hosted runner in a public repository\n/, `${file}: the guard is the first step`);
+    assert.ok(first.includes(`if: \${{ ${publicSelfHosted} }}`), file);
+    assert.match(first, /exit 1/, file);
+  }
+});

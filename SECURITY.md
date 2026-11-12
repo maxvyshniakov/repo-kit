@@ -23,7 +23,8 @@ sandbox, and a repository's `repo-kit.config.mjs`, scripts and dependencies are 
 
 ## Running the workflows safely
 
-The reusable workflows run on the runner the caller names. A pull request from a fork runs that pull request's own
+The reusable workflows run on GitHub-hosted `ubuntu-latest` unless the caller names another runner, and in a public
+repository they refuse a `runner` containing `self-hosted`. That guard covers the reusable jobs only. A pull request from a fork runs that pull request's own
 workflow files, so in a public repository it can target any runner registered to that repository. Keep public pull
 request checks on GitHub-hosted runners, register no self-hosted runner on a public repository (or require approval
 for every outside contributor's workflow runs), and never check out pull-request code in a `pull_request_target`

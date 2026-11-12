@@ -23,9 +23,9 @@ on:
         type: boolean
         default: true
       runner:
-        description: runs-on, as JSON. The default names the maintainer's self-hosted runner; other callers pass their own, for example '["ubuntu-latest"]'.
+        description: runs-on, as JSON. A private repository may pass a self-hosted runner, for example '["self-hosted", "homelab"]'; in a public one a self-hosted label fails the job on a GitHub-hosted runner.
         type: string
-        default: '["self-hosted", "homelab"]'
+        default: '["ubuntu-latest"]'
       slots:
         description: slotfather slots the job leases, where the runner has slotfather; all holds the whole runner.
         type: string
@@ -41,12 +41,17 @@ on:
 jobs:
   release:
     name: Publish
-    runs-on: ${{ fromJSON(inputs.runner) }}
+    runs-on: ${{ github.event.repository.visibility == 'public' && contains(inputs.runner, 'self-hosted') && fromJSON('["ubuntu-latest"]') || fromJSON(inputs.runner) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
       contents: write
       packages: write
     steps:
+      - name: Refuse a self-hosted runner in a public repository
+        if: ${{ github.event.repository.visibility == 'public' && contains(inputs.runner, 'self-hosted') }}
+        run: |
+          echo "::error::A public repository must not run this workflow on a self-hosted runner: a pull request from a fork chooses the code it runs. Drop the runner input to use ubuntu-latest."
+          exit 1
       - if: inputs.enabled
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:

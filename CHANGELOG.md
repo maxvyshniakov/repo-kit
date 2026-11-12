@@ -4,6 +4,10 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+### Changed
+
+- **Breaking for callers relying on the default runner:** `verify.yml`, `browser.yml`, `deploy-storybook.yml` and `release.yml` default `runner` to `'["ubuntu-latest"]'` instead of the maintainer's self-hosted labels. A private repository that wants its self-hosted runner passes `runner: '["self-hosted", "homelab"]'` (or its own labels) when it moves its workflow pins to this release. In a public repository a `runner` containing `self-hosted` runs the job on `ubuntu-latest` and fails its first step, so a fork's pull request never reaches a private runner.
+
 ## 0.5.0 - 2026-11-11
 
 ### Added

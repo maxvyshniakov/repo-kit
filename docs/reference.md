@@ -507,12 +507,9 @@ concurrency:
 jobs:
   check:
     uses: maxvyshniakov/repo-kit/.github/workflows/verify.yml@v0.5.0
-    with:
-      runner: '["ubuntu-latest"]'
   browser:
     uses: maxvyshniakov/repo-kit/.github/workflows/browser.yml@v0.5.0
     with:
-      runner: '["ubuntu-latest"]'
       checks: '[{"name": "stories", "run": "bun run check:stories -- --no-build"}]'
   # !cancelled() lets the deploy start when a check failed; repo-kit ci-gate then
   # deploys under release.gate "local" and does nothing under "ci".
@@ -521,7 +518,6 @@ jobs:
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     uses: maxvyshniakov/repo-kit/.github/workflows/deploy-storybook.yml@v0.5.0
     with:
-      runner: '["ubuntu-latest"]'
       url: https://catalog.example.com
       needs: ${{ toJSON(needs) }}
     secrets: inherit   # the job reads STORYBOOK_CLOUDFLARE_API_TOKEN from the storybook environment
@@ -531,8 +527,14 @@ jobs:
 |---|---|
 | `verify.yml` | `args` (none; `--release` is added for `main` and pull requests into `main`), `slots` (`all`), `slot-wait` (0: wait as long as the job runs), `runner`, `timeout-minutes` (20), `fetch-depth` (1; 0 for a [changelog-entries](#changelog-entries) range step) |
 | `browser.yml` | `checks` (JSON list of `{name, run}`), `build`, `playwright` (true), `slots` (`all`: the build and every check lease them together), `slot-wait` (0), `runner`, `timeout-minutes` (45: the wait, the build and every check) |
-| `deploy-storybook.yml` | `url`, `needs` (the caller's `toJSON(needs)`, for `repo-kit ci-gate`; default `{}`), `environment` (`storybook`), `slots` (`all`, for the builds and `storybook:prepare-deploy`), `slot-wait` (0), `timeout-minutes` (30); `STORYBOOK_CLOUDFLARE_API_TOKEN` from that environment, with `secrets: inherit` |
+| `deploy-storybook.yml` | `url`, `needs` (the caller's `toJSON(needs)`, for `repo-kit ci-gate`; default `{}`), `environment` (`storybook`), `runner`, `slots` (`all`, for the builds and `storybook:prepare-deploy`), `slot-wait` (0), `timeout-minutes` (30); `STORYBOOK_CLOUDFLARE_API_TOKEN` from that environment, with `secrets: inherit` |
 | `release.yml` | `command` (`bun run release:publish`), `enabled` (true), `slots` (`all`), `slot-wait` (0), `runner`, `timeout-minutes` (30); the caller grants `contents: write`, `packages: write` |
+
+`runner` is `runs-on` as JSON and defaults to `'["ubuntu-latest"]'`. A private repository may name a self-hosted
+runner, for example `'["self-hosted", "homelab"]'`. When the caller's repository is public and `runner` contains
+`self-hosted`, the job runs on `ubuntu-latest` instead and its first step fails: a pull request from a fork chooses
+the code a public repository's runner executes. Name self-hosted runners with the `self-hosted` label so the guard
+sees them.
 
 Every heavy step of these workflows runs under a slotfather lease where the runner has slotfather: `verify`, the
 browser build and checks, the Storybook builds and `storybook:prepare-deploy`, and the release command. What runs
