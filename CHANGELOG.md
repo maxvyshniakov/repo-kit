@@ -4,6 +4,19 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+### Breaking
+
+- The optional Playwright peer is `>=1.57.0`, the first release that launches the `moz-firefox` channel `shoot --browser=firefox` uses.
+
+### Fixed
+
+- `repo-kit shoot` (the overall review in repo-kit#3): the image decode no longer waits forever on an image that never loaded; the Vite overlay counts as a shown story, so its reloads run; SIGTERM and SIGHUP close the browser first, also one still launching, give up on a hung close after 10 s and exit at once on a second signal; Safari treats a safaridriver a killed run started (recorded by pid and start time) as dead and any other as live, stops its driver on every failed launch, quits only the automation window its own session started, fails a viewport narrower than Safari allows and warns about a shorter one.
+- `packed-consumer` installs the optional peers the repository pins again, leaving out only those it declares no version of.
+
+### Changed
+
+- `repo-kit shoot`: a story the Vite overlay never leaves, or one on Storybook's error display, gets no picture and the run fails naming it after the others; such a story used to be pictured with exit 0.
+
 ## 0.6.0 - 2026-11-12
 
 ### Breaking

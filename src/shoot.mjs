@@ -128,18 +128,24 @@ export const shotFile = (out, id, theme, width, browser) =>
 export const storyUrl = (base, id, theme) => `${base}/iframe.html?id=${id}&viewMode=story&globals=theme:${theme}`;
 
 // Each of these runs in the page and stands alone.
+// The Vite error overlay can keep Storybook from marking the body: it counts as shown, so the reloads run.
 function storyShown() {
-  return document.body.classList.contains("sb-show-main") || document.body.classList.contains("sb-show-errordisplay");
+  return document.body.classList.contains("sb-show-main") || document.body.classList.contains("sb-show-errordisplay")
+    || Boolean(document.querySelector("vite-error-overlay"));
 }
 function viewportImagesLoaded() {
   return [...document.images]
     .filter(image => { const box = image.getBoundingClientRect(); return box.bottom > 0 && box.top < innerHeight && box.right > 0 && box.left < innerWidth; })
     .every(image => image.complete && image.naturalWidth > 0);
 }
-function decodeViewportImages() {
-  return Promise.all([...document.images]
+// Decodes the loaded images in view, for at most 5 s: decode() on an image that never
+// loaded stays pending, and the wait before it already gave up on those.
+export function decodeViewportImages() {
+  const decoded = Promise.all([...document.images]
     .filter(image => { const box = image.getBoundingClientRect(); return box.bottom > 0 && box.top < innerHeight && box.right > 0 && box.left < innerWidth; })
-    .map(image => image.decode().catch(() => {}))).then(() => true);
+    .filter(image => image.complete && image.naturalWidth > 0)
+    .map(image => image.decode().catch(() => {})));
+  return Promise.race([decoded, new Promise(resolve => setTimeout(resolve, 5000))]).then(() => true);
 }
 
 function pageHeight() {
@@ -182,7 +188,7 @@ async function waitForStory(page, id, { sleep, log }) {
  * Screenshots every matching story; resolves to the files written. `launch`
  * starts a browser by name.
  */
-export async function shootStories(options, { launch, fetch: get = fetch, sleep = realSleep, log = console.log, warn = console.warn, storybookDir } = {}) {
+export async function shootStories(options, { launch, fetch: get = fetch, sleep = realSleep, log = console.log, warn = console.warn, storybookDir, signals = process, exit = code => process.exit(code) } = {}) {
   const index = await readIndex(options.url, { storybookDir, fetch: get, sleep });
   const ids = Object.values(index.entries)
     .filter(entry => entry.type === "story" && options.filters.some(filter => entry.id.includes(filter)))
@@ -191,8 +197,35 @@ export async function shootStories(options, { launch, fetch: get = fetch, sleep 
 
   fs.mkdirSync(options.out, { recursive: true });
   const files = [];
+  const broken = [];
   for (const browserName of options.browsers) {
-    const browser = await launch(browserName);
+    // A run stopped by SIGTERM or SIGHUP (one runLeased forwards, say) closes its browser
+    // first, also one still launching: Safari's driver and automation window would outlive
+    // it and keep the next run busy. One close serves the signal and the run's own end; a
+    // close that hangs gives up after 10 s, and a second signal exits at once.
+    let browser = null, closing = null, stopping = null;
+    const close = () => (closing ??= Promise.resolve().then(() => browser?.close()).catch(() => {}));
+    const stop = signal => {
+      const code = 128 + os.constants.signals[signal];
+      if (stopping) return exit(code);
+      stopping = signal;
+      if (!browser) return; // the launch below closes it once it resolves
+      Promise.race([close(), new Promise(resolve => setTimeout(resolve, 10000).unref?.())]).finally(() => exit(code));
+    };
+    const onTerm = () => stop("SIGTERM"), onHup = () => stop("SIGHUP");
+    signals.on("SIGTERM", onTerm);
+    signals.on("SIGHUP", onHup);
+    try {
+      browser = await launch(browserName);
+    } catch (error) {
+      signals.off("SIGTERM", onTerm);
+      signals.off("SIGHUP", onHup);
+      throw error;
+    }
+    if (stopping) {
+      await Promise.race([close(), new Promise(resolve => setTimeout(resolve, 10000).unref?.())]);
+      return exit(128 + os.constants.signals[stopping]);
+    }
     try {
       for (const width of options.widths) {
         const page = await browser.newPage({ viewport: { width, height: VIEWPORT_HEIGHT } });
@@ -200,12 +233,22 @@ export async function shootStories(options, { launch, fetch: get = fetch, sleep 
           for (const id of ids) {
             await page.goto(storyUrl(options.url, id, theme), { waitUntil: "load" });
             await waitForStory(page, id, { sleep, log: warn });
-            for (let attempt = 0; attempt < 6 && await page.locator("vite-error-overlay").count(); attempt += 1) {
+            let overlay = await page.locator("vite-error-overlay").count();
+            for (let attempt = 0; attempt < 6 && overlay; attempt += 1) {
               await sleep(4000);
               await page.reload({ waitUntil: "load" });
               await waitForStory(page, id, { sleep, log: warn });
+              overlay = await page.locator("vite-error-overlay").count();
             }
             const file = shotFile(options.out, id, theme, width, browserName);
+            // A picture of an error is no picture of the story: the run fails naming it.
+            const error = overlay ? "the Vite error overlay stays after 6 reloads"
+              : await page.locator("body.sb-show-errordisplay").count() ? "Storybook shows the story's error" : null;
+            if (error) {
+              warn(`${id}: ${error}; no picture ${path.basename(file)}`);
+              broken.push(`${path.basename(file)} (${error})`);
+              continue;
+            }
             // Safari's WebDriver screenshot covers the viewport only; it ignores fullPage and clip.
             const shot = { path: file, fullPage: options.full };
             if (options.full && browserName !== "safari") {
@@ -223,9 +266,14 @@ export async function shootStories(options, { launch, fetch: get = fetch, sleep 
         await page.close();
       }
     } finally {
-      await browser.close();
+      if (!stopping) {
+        signals.off("SIGTERM", onTerm);
+        signals.off("SIGHUP", onHup);
+      }
+      await close();
     }
   }
+  if (broken.length) throw new Error(`${broken.length} stor${broken.length === 1 ? "y" : "ies"} could not be pictured: ${broken.join(", ")}`);
   return files;
 }
 

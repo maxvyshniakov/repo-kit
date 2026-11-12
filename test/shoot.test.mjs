@@ -7,7 +7,9 @@ import test from "node:test";
 
 import { withDefaults } from "../src/config.mjs";
 import { browserNames, launchBrowser, loadPlaywright, parseBrowserNames, parseShootArgs, readIndex, shootStories, shotFile, storyUrl } from "../src/shoot.mjs";
-import { closeSafari, pairingRecovery } from "../src/safari.mjs";
+import { EventEmitter } from "node:events";
+import { closeSafari, launchSafari, pairingRecovery, splitDrivers } from "../src/safari.mjs";
+import { decodeViewportImages } from "../src/shoot.mjs";
 import { kitRoot, tempRepository } from "./fixtures.mjs";
 
 const defaults = { root: "/work/sid-kit", env: {}, tmpdir: "/tmp", cwd: "/work/sid-kit", shoot: withDefaults({}).shoot };
@@ -113,7 +115,7 @@ test("pictures are named <story>-<theme>-<width>, with the browser after it exce
 });
 
 // A browser stand-in that records what a page was asked to do, in order.
-function fakeBrowsers({ overlays = 0, height = 2000 } = {}) {
+function fakeBrowsers({ overlays = 0, height = 2000, errorDisplay = false } = {}) {
   const calls = [];
   let overlay = overlays;
   const launch = name => ({
@@ -124,7 +126,8 @@ function fakeBrowsers({ overlays = 0, height = 2000 } = {}) {
         reload: () => calls.push("reload"),
         waitForFunction: fn => calls.push(`wait ${fn.name}`),
         evaluate: fn => (calls.push(`evaluate ${fn.name}`), fn.name === "pageHeight" ? height : true),
-        locator: selector => ({ count: () => (calls.push(`count ${selector}`), overlay > 0 ? overlay-- : 0) }),
+        locator: selector => ({ count: () => (calls.push(`count ${selector}`),
+          selector === "vite-error-overlay" ? (overlay > 0 ? overlay-- : 0) : errorDisplay ? 1 : 0) }),
         screenshot: ({ path: file, fullPage, clip }) => calls.push(`screenshot ${path.basename(file)} fullPage=${fullPage}${clip ? ` clip=${JSON.stringify(clip)}` : ""}`),
         close: () => calls.push("close page"),
       };
@@ -151,7 +154,7 @@ test("shoot waits for the story, a settle, then the viewport images loaded and d
       { launch, fetch: fetchIndex, sleep: ms => (calls.push(`sleep ${ms}`), sleeps.push(ms)), log: () => {} },
     );
     assert.deepEqual(files.map(file => path.basename(file)), ["button--default-light-1280.png", "button--default-light-1280-safari.png"]);
-    assert.deepEqual(calls.slice(0, 12), [
+    assert.deepEqual(calls.slice(0, 13), [
       "chromium newPage 1280x900",
       "goto http://sb/iframe.html?id=button--default&viewMode=story&globals=theme:light",
       "wait storyShown",
@@ -160,12 +163,13 @@ test("shoot waits for the story, a settle, then the viewport images loaded and d
       "evaluate decodeViewportImages",
       "sleep 200",
       "count vite-error-overlay",
+      "count body.sb-show-errordisplay",
       "evaluate pageHeight",
       "screenshot button--default-light-1280.png fullPage=true",
       "close page",
       "chromium close",
     ]);
-    assert.equal(calls[12], "safari newPage 1280x900");
+    assert.equal(calls[13], "safari newPage 1280x900");
   } finally {
     fs.rmSync(out, { recursive: true, force: true });
   }
@@ -279,7 +283,7 @@ test("closing Safari ends the session, stops the driver, and quits the automatio
   const run = async ({ startedInstance, quit = async () => steps.push("quit"), deleteSession = async () => steps.push("delete") }) => {
     steps.length = 0;
     const warnings = [];
-    await closeSafari({ deleteSession, killDriver: () => steps.push("kill"), startedInstance, quit, warn: message => warnings.push(message) });
+    await closeSafari({ deleteSession, killDriver: () => steps.push("kill"), startedInstance, ownWindows: [77], quit, warn: message => warnings.push(message) });
     return warnings;
   };
   const steps = [];
@@ -291,4 +295,179 @@ test("closing Safari ends the session, stops the driver, and quits the automatio
   assert.deepEqual(warnings, ["repo-kit: Safari Technology Preview's automation window did not quit"], "a lingering window warns instead of failing the run");
   await assert.rejects(run({ startedInstance: true, deleteSession: async () => { throw new Error("session gone"); } }), /session gone/);
   assert.deepEqual(steps, ["kill", "quit"], "the driver stops and the window quits even when ending the session fails");
+});
+
+// repo-kit#3: the overall review of 0.3.1.
+
+test("decoding the images in view skips ones that never loaded and gives up after 5 s", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const image = (complete, decode) => ({ complete, naturalWidth: complete ? 10 : 0, decode, getBoundingClientRect: () => ({ top: 0, bottom: 10, left: 0, right: 10 }) });
+  const stalled = image(false, () => assert.fail("an image that never loaded is not decoded"));
+  const hung = image(true, () => new Promise(() => {}));
+  Object.assign(globalThis, { document: { images: [stalled, hung] }, innerHeight: 900, innerWidth: 1280 });
+  try {
+    let done = false;
+    const result = decodeViewportImages().then(value => (done = true, value));
+    await Promise.resolve();
+    assert.equal(done, false);
+    t.mock.timers.tick(5000);
+    assert.equal(await result, true);
+  } finally {
+    delete globalThis.document;
+    delete globalThis.innerHeight;
+    delete globalThis.innerWidth;
+  }
+});
+
+test("a story the overlay never leaves, or that shows Storybook's error, gets no picture and fails the run", async () => {
+  for (const [shape, reason] of [[{ overlays: 99 }, /Vite error overlay stays after 6 reloads/], [{ errorDisplay: true }, /Storybook shows the story's error/]]) {
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), "repo-kit-shoot-"));
+    const { calls, launch } = fakeBrowsers(shape);
+    const warnings = [];
+    try {
+      await assert.rejects(shootStories(
+        { filters: ["badge"], themes: ["dark"], widths: [375], browsers: ["firefox"], out, full: false, url: "http://sb" },
+        { launch, fetch: fetchIndex, sleep: () => {}, log: () => {}, warn: message => warnings.push(message) },
+      ), new RegExp(`1 story could not be pictured: badge--default-dark-375-firefox\\.png \\(.*${reason.source}`));
+      assert.ok(!calls.some(call => call.startsWith("screenshot")), calls.join("\n"));
+      assert.ok(calls.includes("firefox close"));
+      assert.match(warnings.join("\n"), reason);
+    } finally {
+      fs.rmSync(out, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a signal while the browser launches closes it once it is up; a second signal exits at once", async () => {
+  const signals = new EventEmitter();
+  const events = [];
+  let exited;
+  const exitedOnce = new Promise(resolve => (exited = resolve));
+  let launched;
+  const launch = () => new Promise(resolve => (launched = resolve));
+  shootStories({ filters: ["badge"], themes: ["dark"], widths: [375], browsers: ["safari"], out: os.tmpdir(), full: false, url: "http://sb" },
+    { launch, fetch: fetchIndex, sleep: () => {}, log: () => {}, signals, exit: code => (events.push(`exit ${code}`), exited()) });
+  await new Promise(resolve => setImmediate(resolve));
+  signals.emit("SIGTERM");
+  assert.deepEqual(events, [], "nothing to close yet");
+  launched({ newPage: () => assert.fail("no page after the signal"), close: async () => events.push("close") });
+  await exitedOnce;
+  assert.deepEqual(events, ["close", "exit 143"]);
+
+  const again = new EventEmitter();
+  const codes = [];
+  const hanging = () => ({ newPage: async () => { again.emit("SIGTERM"); again.emit("SIGTERM"); await new Promise(() => {}); }, close: () => new Promise(() => {}) });
+  shootStories({ filters: ["badge"], themes: ["dark"], widths: [375], browsers: ["safari"], out: os.tmpdir(), full: false, url: "http://sb" },
+    { launch: hanging, fetch: fetchIndex, sleep: () => {}, log: () => {}, signals: again, exit: code => codes.push(code) });
+  for (let i = 0; i < 5 && !codes.length; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(codes, [143], "the second SIGTERM exits while the close hangs");
+});
+
+test("SIGTERM or SIGHUP closes the open browser before the run exits", async () => {
+  for (const signal of ["SIGTERM", "SIGHUP"]) {
+    const signals = new EventEmitter();
+    const events = [];
+    let exited;
+    const exitedOnce = new Promise(resolve => (exited = resolve));
+    const launch = () => ({
+      newPage: async () => {
+        signals.emit(signal);
+        await new Promise(() => {}); // the run is stopped while it works
+      },
+      close: async () => events.push("close"),
+    });
+    shootStories({ filters: ["badge"], themes: ["dark"], widths: [375], browsers: ["safari"], out: os.tmpdir(), full: false, url: "http://sb" },
+      { launch, fetch: fetchIndex, sleep: () => {}, log: () => {}, signals, exit: code => (events.push(`exit ${code}`), exited()) });
+    await exitedOnce;
+    assert.deepEqual(events, ["close", `exit ${128 + os.constants.signals[signal]}`], signal);
+  }
+});
+
+test("an orphaned safaridriver a run started is no live holder: the browser is restarted, not busy", () => {
+  const started = { 10: "Thu Nov 12 20:00:00 2026", 13: "Thu Nov 12 19:00:00 2026" };
+  const rows = [
+    { pid: 10, ppid: 1, start: "Thu Nov 12 20:00:00 2026" }, // a killed run's driver
+    { pid: 11, ppid: 500, start: "x" }, // a live run's
+    { pid: 12, ppid: 600, start: "y" }, // this run's own
+    { pid: 13, ppid: 1, start: "Thu Nov 12 21:30:00 2026" }, // the pid is reused by a later process
+    { pid: 14, ppid: 1, start: "z" }, // detached by someone else (nohup, a launchd agent): maybe serving
+  ];
+  const { live, orphans } = splitDrivers(rows, 12, started);
+  assert.deepEqual(live, [11, 13, 14]);
+  assert.deepEqual(orphans, [10]);
+  const paired = "safaridriver POST /session: Safari Technology Preview is already paired with another WebDriver session.";
+  assert.equal(pairingRecovery(paired, splitDrivers([rows[0]], 12, started).live), "restart");
+  assert.equal(pairingRecovery(paired, splitDrivers([rows[4]], 12, started).live), "busy");
+});
+
+/** A Safari Technology Preview stand-in: safaridriver's HTTP answers and the process table. */
+function fakeSafari({ ready = async () => {}, frontmost = () => "com.apple.Terminal", session = "ok", windowsBefore = [], windowsAfter = [77], inner = [1280, 900] } = {}) {
+  const events = [];
+  let windows = windowsBefore;
+  const system = {
+    exists: () => true,
+    freePort: async () => 4444,
+    spawn: () => ({ pid: 1000, kill: () => events.push("kill driver") }),
+    recordStarted: (pid, add) => events.push(`${add ? "record" : "forget"} ${pid}`),
+    waitForDriver: ready,
+    frontmostBundle: frontmost,
+    activate: bundle => events.push(`activate ${bundle}`),
+    otherDrivers: () => ({ live: session === "busy" ? [2000] : [], orphans: [] }),
+    automationPids: () => windows,
+    quitAutomationInstance: async which => events.push(`quit ${JSON.stringify(which)}`),
+    warn: () => {},
+    fetch: async (url, init) => {
+      const { pathname } = new URL(url);
+      events.push(`${init.method} ${pathname}`);
+      const reply = (ok, value) => ({ ok, status: ok ? 200 : 500, json: async () => ({ value }) });
+      if (pathname === "/session" && init.method === "POST") {
+        if (session === "busy") {
+          // The race's winner starts its window meanwhile.
+          windows = [...windowsBefore, 88];
+          return reply(false, { message: "Safari Technology Preview is already paired with another WebDriver session." });
+        }
+        windows = [...windowsBefore, ...windowsAfter];
+        return reply(true, { sessionId: "s1", capabilities: { browserVersion: "26" } });
+      }
+      if (pathname.endsWith("/execute/sync")) return reply(true, inner);
+      return reply(true, null);
+    },
+  };
+  return { events, system };
+}
+
+test("a failed Safari launch stops its driver, whatever failed", async () => {
+  const { events, system } = fakeSafari({ ready: async () => { throw new Error("safaridriver did not start"); } });
+  await assert.rejects(launchSafari(system), /did not start/);
+  assert.deepEqual(events, ["record 1000", "kill driver", "forget 1000"]);
+});
+
+test("Safari launches when the frontmost app cannot be read, and hands focus to none", async () => {
+  const { events, system } = fakeSafari({ frontmost: () => { throw new Error("osascript failed"); } });
+  const browser = await launchSafari(system);
+  assert.ok(events.includes("POST /session"));
+  assert.ok(!events.some(event => event.startsWith("activate")));
+  await browser.close();
+});
+
+test("a run that loses the start race quits no window; a run quits only the window its session started", async () => {
+  const lost = fakeSafari({ session: "busy" });
+  await assert.rejects(launchSafari(lost.system), /Another run holds it \(safaridriver 2000\)/);
+  assert.ok(!lost.events.some(event => event.startsWith("quit")), lost.events.join("\n"));
+
+  const won = fakeSafari({ windowsBefore: [55], windowsAfter: [77] });
+  const browser = await launchSafari(won.system);
+  await browser.close();
+  assert.deepEqual(won.events.filter(event => event.startsWith("quit") || event === "kill driver"), ["kill driver", "quit [77]"]);
+
+  const attached = fakeSafari({ windowsBefore: [55], windowsAfter: [] });
+  await (await launchSafari(attached.system)).close();
+  assert.ok(!attached.events.some(event => event.startsWith("quit")), "a run that started no window quits none");
+});
+
+test("a Safari viewport narrower than Safari allows fails instead of saving a wider picture", async () => {
+  const { system } = fakeSafari({ inner: [500, 800] });
+  const browser = await launchSafari(system);
+  await assert.rejects(browser.newPage({ viewport: { width: 375, height: 900 } }), /gives a 500 px wide viewport, not 375 px/);
+  await browser.close();
 });

@@ -422,10 +422,12 @@ the repository's own server.
 
 Before each picture it waits, in order, for Storybook's rendered mark (`sb-show-main` on `body`, or the error
 display), a 1.2 s settle for mounted content, then every image in the viewport `complete` with a `naturalWidth`
-(up to 15 s, then a warning), each `decode()`d. Safari paints lazy, async-decoded images late, and a wait over an
+(up to 15 s, then a warning), each loaded one `decode()`d (up to 5 s more). Safari paints lazy, async-decoded images late, and a wait over an
 empty list of images passes before the content mounts, so the settle comes first. A dev server keeps a failed story
 index until the broken file changes again: shoot touches the file the error names (under `shoot.storybookDir`, default
-`apps/storybook`) and retries, and reloads a story that shows the Vite error overlay.
+`apps/storybook`) and retries, and reloads a story that shows the Vite error overlay, up to 6 times. A story the
+overlay never leaves, or one on Storybook's error display, gets no picture: the run goes on with the others and
+then fails naming them.
 
 | `--browser=` | Engine |
 |---|---|
@@ -434,7 +436,8 @@ index until the broken file changes again: shoot touches the file the error name
 | `webkit` | Playwright's WebKit. It renders like Safari but has none of Safari's scrolling or settings: static layout only. |
 | `safari` | Safari Technology Preview over its own `safaridriver`. Viewport pictures only (WebDriver), `fullPage` is ignored. |
 
-Playwright stays the repository's own pinned devDependency: repo-kit declares it as an optional peer and loads it from
+Playwright stays the repository's own pinned devDependency (1.57 or later, the first that launches the
+`moz-firefox` channel): repo-kit declares it as an optional peer and loads it from
 the repository root, and `safari` needs none. `firefox` needs Firefox installed.
 
 Safari itself refuses WebDriver while the user has it open, so `safari` drives Safari Technology Preview, which runs
@@ -445,8 +448,14 @@ that had it, and the window keeps drawing behind the user's apps. When the run e
 it started (SIGTERM: in automation mode it ignores a quit request and window close). Do not hide or minimise it: WebKit then marks the
 page hidden, stops drawing frames and cannot screenshot. A run that ended without closing its session (killed, or its
 safaridriver gone) leaves Safari Technology Preview "already paired with another WebDriver session"; when no other
-safaridriver of it runs, shoot quits that automation window (`--automation`, never the user's own) and starts again,
-and when one runs, it fails naming that driver.
+live safaridriver of it runs (one a repo-kit run started, recorded with its start time in the temporary directory,
+whose run was killed is orphaned to launchd, ppid 1, and is stopped; any other driver counts as live), shoot quits
+that automation window (`--automation`, never the user's own) and starts again, and when one runs, it fails naming
+that driver. SIGTERM and SIGHUP close the browser before the run exits. A run quits only the automation window its
+own session started, so two runs starting together never quit each other's; an automation window a session
+attaches to without starting it (one an earlier quit left behind) stays open until a restart quits it. Safari keeps a minimum window size: a
+`--width` narrower than the viewport it gives fails the run instead of saving a wider picture under that name; a
+height the display cannot fit warns.
 
 ```js
 // repo-kit.config.mjs; every field is optional

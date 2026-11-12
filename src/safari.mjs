@@ -12,6 +12,8 @@
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 
 const app = "/Applications/Safari Technology Preview.app";
 const driverPath = `${app}/Contents/MacOS/safaridriver`;
@@ -62,40 +64,65 @@ export function pairingRecovery(message, otherDrivers) {
   return otherDrivers.length ? "busy" : "restart";
 }
 
-/** Process ids of Safari Technology Preview's safaridriver other than `own`. */
-function otherDrivers(own) {
+/**
+ * Other safaridrivers, split into live ones and orphans. An orphan is a driver
+ * a repo-kit run started (`started`, pid to its start time) whose run was
+ * killed before it could stop it: it is reparented to launchd (ppid 1), serves
+ * nobody, and keeps the browser paired. Any other driver, detached or not,
+ * may serve someone and counts as live. `rows` are { pid, ppid, start }.
+ */
+export function splitDrivers(rows, own, started = {}) {
+  const others = rows.filter(({ pid }) => pid && pid !== own);
+  const orphan = ({ pid, ppid, start }) => ppid === 1 && started[pid] !== undefined && started[pid] === start;
+  return { live: others.filter(row => !orphan(row)).map(({ pid }) => pid), orphans: others.filter(orphan).map(({ pid }) => pid) };
+}
+
+// The safaridrivers repo-kit runs started, by pid and start time, so a later run knows its own orphans.
+const startedFile = path.join(os.tmpdir(), "repo-kit-safaridrivers.json");
+const readStarted = () => { try { return JSON.parse(fs.readFileSync(startedFile, "utf8")); } catch { return {}; } };
+const startTime = pid => { try { return execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8" }).trim(); } catch { return null; } };
+function recordStarted(pid, add) {
+  const started = readStarted();
+  if (add) started[pid] = startTime(pid);
+  else delete started[pid];
+  try { fs.writeFileSync(startedFile, JSON.stringify(started)); } catch {}
+}
+
+function pids(pattern) {
   try {
-    return execFileSync("pgrep", ["-f", driverPath], { encoding: "utf8" }).split("\n").map(Number).filter(pid => pid && pid !== own);
+    return execFileSync("pgrep", ["-f", pattern], { encoding: "utf8" }).split("\n").map(Number).filter(Boolean);
   } catch {
     return [];
   }
 }
 
+/** Safari Technology Preview's safaridrivers other than `own`, live and orphaned. */
+function otherDrivers(own) {
+  const rows = pids(driverPath).map(pid => {
+    try {
+      return { pid, ppid: Number(execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8" }).trim()), start: startTime(pid) };
+    } catch {
+      return { pid: 0, ppid: 0 };
+    }
+  });
+  return splitDrivers(rows, own, readStarted());
+}
+
 // Only the instance safaridriver started (--automation); the user's own window is left alone.
 const automationInstance = `${app}/Contents/MacOS/Safari Technology Preview .*--automation`;
+const automationPids = () => pids(automationInstance);
 
-async function quitAutomationInstance() {
-  try {
-    execFileSync("pkill", ["-TERM", "-f", automationInstance]);
-  } catch {}
+/** SIGTERM to the given automation windows, or every one when `which` is "all"; waits until they quit. */
+async function quitAutomationInstance(which = "all") {
+  const targets = () => which === "all" ? automationPids() : automationPids().filter(pid => which.includes(pid));
+  for (const pid of targets()) {
+    try { process.kill(pid, "SIGTERM"); } catch {}
+  }
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    try {
-      execFileSync("pgrep", ["-f", automationInstance]);
-    } catch {
-      return;
-    }
+    if (!targets().length) return;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   throw new Error("Safari Technology Preview's automation window did not quit");
-}
-
-function automationInstanceRuns() {
-  try {
-    execFileSync("pgrep", ["-f", automationInstance]);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -105,14 +132,15 @@ function automationInstanceRuns() {
  * holding memory; it ignores NSRunningApplication.terminate and window close
  * there, so it gets SIGTERM. A window that lingers warns: the pictures are taken.
  */
-export async function closeSafari({ deleteSession, killDriver, startedInstance, quit = quitAutomationInstance, warn = console.warn }) {
+export async function closeSafari({ deleteSession, killDriver, startedInstance, ownWindows = [], quit = quitAutomationInstance, warn = console.warn }) {
   try {
     await deleteSession();
   } finally {
     killDriver();
-    if (startedInstance) {
+    if (startedInstance && ownWindows.length) {
       try {
-        await quit();
+        // Only this run's window: another run may have attached its own meanwhile.
+        await quit(ownWindows);
       } catch (error) {
         warn(`repo-kit: ${error.message}`);
       }
@@ -120,44 +148,66 @@ export async function closeSafari({ deleteSession, killDriver, startedInstance, 
   }
 }
 
-export async function launchSafari() {
-  if (!fs.existsSync(driverPath)) throw new Error(`Safari Technology Preview is not installed: ${app} (repo-kit README, "Story screenshots")`);
-  const port = await freePort();
-  const driver = spawn(driverPath, ["-p", String(port)], { stdio: "ignore" });
+/** The defaults launchSafari runs with; tests replace them. */
+export const safariSystem = { exists: fs.existsSync, freePort, spawn, recordStarted, waitForDriver, frontmostBundle, activate, otherDrivers, automationPids, quitAutomationInstance, fetch: (...args) => fetch(...args), warn: (...args) => console.warn(...args) };
+
+export async function launchSafari(system = safariSystem) {
+  const { exists, freePort: pickPort, spawn: start, recordStarted: record, waitForDriver: ready, frontmostBundle: frontmost, activate: focus, otherDrivers: drivers, automationPids: windows, quitAutomationInstance: quit, fetch: get, warn } = { ...safariSystem, ...system };
+  if (!exists(driverPath)) throw new Error(`Safari Technology Preview is not installed: ${app} (repo-kit README, "Story screenshots")`);
+  const port = await pickPort();
+  const spawned = start(driverPath, ["-p", String(port)], { stdio: "ignore" });
+  record(spawned.pid, true);
+  const driver = { pid: spawned.pid, kill: () => { spawned.kill(); record(spawned.pid, false); } };
   const base = `http://127.0.0.1:${port}`;
-  await waitForDriver(base);
-  const previous = frontmostBundle();
   const call = async (method, path, body) => {
     const init = body === undefined ? { method } : { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
-    const response = await fetch(`${base}${path}`, init);
+    const response = await get(`${base}${path}`, init);
     const { value } = await response.json();
     if (!response.ok) throw new Error(`safaridriver ${method} ${path}: ${value?.message ?? response.status}`);
     return value;
   };
   const capabilities = { capabilities: { alwaysMatch: { browserName: "Safari Technology Preview" } } };
-  // An automation window that runs already belongs to another run, or to one that died.
-  let startedInstance = !automationInstanceRuns();
+  // The automation windows before this run's session: any that runs already belongs to
+  // another run, or to one that died. This run owns only the windows its session added.
+  let before = windows();
+  let previous = null;
+  let restarted = false;
   let session;
   try {
+    await ready(base);
+    try {
+      previous = frontmost();
+    } catch {
+      previous = null;
+    }
     try {
       session = await call("POST", "/session", capabilities);
     } catch (error) {
-      const others = otherDrivers(driver.pid);
-      const recovery = pairingRecovery(error.message, others);
-      if (recovery === "busy") throw new Error(`${error.message} Another run holds it (safaridriver ${others.join(", ")}); try again when it ends.`);
+      const { live, orphans } = drivers(driver.pid);
+      const recovery = pairingRecovery(error.message, live);
+      if (recovery === "busy") throw new Error(`${error.message} Another run holds it (safaridriver ${live.join(", ")}); try again when it ends.`);
       if (recovery !== "restart") throw error;
-      console.warn("repo-kit: Safari Technology Preview was left paired by a run that ended; restarting its automation window");
-      await quitAutomationInstance();
-      startedInstance = true;
+      warn("repo-kit: Safari Technology Preview was left paired by a run that ended; restarting its automation window");
+      for (const pid of orphans) {
+        try { process.kill(pid, "SIGTERM"); } catch {}
+        record(pid, false);
+      }
+      await quit("all");
+      before = [];
+      restarted = true;
       session = await call("POST", "/session", capabilities);
     }
   } catch (error) {
     driver.kill();
-    if (startedInstance) await quitAutomationInstance().catch(() => {});
+    // Only a window this run's session started; a busy run started none.
+    const own = windows().filter(pid => !before.includes(pid));
+    if ((session || restarted) && own.length) await quit(own).catch(() => {});
     throw error;
   } finally {
-    if (previous && previous !== previewBundle) activate(previous);
+    if (previous && previous !== previewBundle) focus(previous);
   }
+  const ownWindows = windows().filter(pid => !before.includes(pid));
+  const startedInstance = ownWindows.length > 0;
   const at = (path) => `/session/${session.sessionId}${path}`;
   const browser = {
     version: () => session.capabilities.browserVersion,
@@ -168,6 +218,11 @@ export async function launchSafari() {
           await call("POST", at("/window/rect"), { x: 0, y: 0, width, height });
           const inner = await page.evaluate(() => [innerWidth, innerHeight]);
           await call("POST", at("/window/rect"), { width: width * 2 - inner[0], height: height * 2 - inner[1] });
+          // Safari keeps a minimum window size: a picture named for 375 px must be 375 px wide.
+          const [gotWidth, gotHeight] = await page.evaluate(() => [innerWidth, innerHeight]);
+          if (gotWidth !== width) throw new Error(`Safari Technology Preview gives a ${gotWidth} px wide viewport, not ${width} px; pick a width it can show`);
+          // A short display cannot fit the height: the picture is shorter, not wrong.
+          if (gotHeight !== height) console.warn(`repo-kit: Safari Technology Preview gives a ${gotHeight} px tall viewport, not ${height} px`);
         },
         goto: (url) => call("POST", at("/url"), { url }),
         reload: () => call("POST", at("/refresh"), {}),
@@ -189,7 +244,7 @@ export async function launchSafari() {
       if (viewport) await page.setViewportSize(viewport);
       return page;
     },
-    close: () => closeSafari({ deleteSession: () => call("DELETE", at("")), killDriver: () => driver.kill(), startedInstance }),
+    close: () => closeSafari({ deleteSession: () => call("DELETE", at("")), killDriver: () => driver.kill(), startedInstance, ownWindows, quit }),
   };
   return browser;
 }

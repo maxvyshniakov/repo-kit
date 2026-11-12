@@ -70,13 +70,25 @@ export function tarballIssues({ manifest, packedManifest, files }) {
 }
 
 /**
- * The peers a consumer installs beside the archives: every peer the manifests
- * declare except optional ones (repo-kit's Playwright, which only `repo-kit
- * shoot` loads, from the repository).
+ * The peers a consumer installs beside the archives: every required peer the
+ * manifests declare, and each optional one the repository pins (an entry may
+ * import it, a declaration may name it). An optional peer with no version in
+ * the repository is left out: repo-kit's own Playwright, which only `repo-kit
+ * shoot` loads, from the repository using it. `pinned(name)` throws when no
+ * version is declared; without it every optional peer is left out.
  */
-export function requiredPeers(manifests) {
+export function requiredPeers(manifests, pinned = null) {
+  const has = name => {
+    if (!pinned) return false;
+    try {
+      pinned(name);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   return [...new Set(manifests.flatMap(({ peerDependencies = {}, peerDependenciesMeta = {} }) =>
-    Object.keys(peerDependencies).filter(name => !peerDependenciesMeta[name]?.optional)))];
+    Object.keys(peerDependencies).filter(name => !peerDependenciesMeta[name]?.optional || has(name))))];
 }
 
 /**
@@ -151,7 +163,7 @@ export async function runPackedConsumer(config, { keep = false, args = [] } = {}
 
     console.log(`\nInstalling a consumer in ${consumerDir}`);
     const names = new Set(packages.map(pkg => pkg.name));
-    const peers = requiredPeers(packages.map(pkg => pkg.manifest)).filter(name => !names.has(name));
+    const peers = requiredPeers(packages.map(pkg => pkg.manifest), pinned).filter(name => !names.has(name));
     const at = list => Object.fromEntries(list.map(name => [name, pinned(name)]));
     // Declarations are checked unless the config says the packages ship none
     // (types: false); then typescript must be pinned, so a range cannot skip it.
