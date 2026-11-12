@@ -292,7 +292,7 @@ export async function runReleaseGate(config, args = [], deps = {}) {
   }
 
   const browserConfigured = Boolean(config.verify?.browser);
-  if (await lease(Math.max(config.verify?.slots ?? 1, browserConfigured ? config.verify?.browserSlots ?? 1 : 0), { env })) return process.exitCode;
+  if (await lease(Math.max(config.verify?.slots ?? 1, browserConfigured ? config.verify?.browserSlots ?? 1 : 0), { env, purpose: "release-gate" })) return process.exitCode;
 
   const tooOld = bunTooOld(localBunVersion());
   if (tooOld) return fail(`release-gate: ${tooOld}.`);

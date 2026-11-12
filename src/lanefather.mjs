@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { loadConfig } from './config.mjs';
-import { runVerify, verifySteps } from './verify.mjs';
+import { readCapacity, runVerify, verifySteps } from './verify.mjs';
 import { cleanEnvironment } from './pre-push.mjs';
 import { leaseSelf, verifyLeaseSlots } from './heavy.mjs';
 
@@ -15,6 +15,19 @@ export function configuredChecks(config) {
   return suites.flatMap(suite => verifySteps(config, { browser: suite === 'browser' }).map(step => ({
     id: `${suite}:${encodeURIComponent(step.name)}`, suite, step,
   })));
+}
+
+/**
+ * The slots the run leases. Lanefather's --jobs is the lease it decided for this
+ * run (its check contract: verify queues for its own --jobs-slot lease); the
+ * configured slots of the selected suites cap it, and are the lease without it.
+ */
+export function laneLeaseSlots(config, selected, jobs = Infinity, { gibPerSlot = 0 } = {}) {
+  const configured = Math.max(...selected.map(check => check.suite === 'browser' ? config.verify.browserSlots : config.verify.slots));
+  // Where slotfather gives a slot memory, never fewer slots than the largest step's declared memory needs.
+  const largest = Math.max(0, ...selected.map(check => check.step?.memory ?? 0));
+  const floor = gibPerSlot > 0 ? Math.ceil(largest / gibPerSlot) : 0;
+  return Math.min(configured, Math.max(jobs, floor));
 }
 
 export async function main(args) {
@@ -72,8 +85,11 @@ export async function main(args) {
     selected = checks.filter(check => suites.includes(check.suite));
   }
   if (!selected.length) throw new Error('no configured checks selected');
-  const slots = Math.max(...selected.map(check => check.suite === 'browser' ? config.verify.browserSlots : config.verify.slots));
-  if (await leaseSelf(verifyLeaseSlots(slots), { env: gitEnv })) return process.exitCode;
+  // The label names the lane (REPO_KIT_SLOT_LABEL, from Lanefather) and the phase, e.g. "lane-sk-api-surfaces check".
+  let phase = 'check';
+  try { phase = JSON.parse(gitEnv.REPO_KIT_SLOT_META || '{}').phase || phase; } catch { /* leasedCommand reports bad metadata */ }
+  const lease = Number.isFinite(jobs) && !gitEnv.SLOTFATHER_LEASE ? laneLeaseSlots(config, selected, jobs, { gibPerSlot: readCapacity().gib_per_slot ?? 0 }) : laneLeaseSlots(config, selected, jobs);
+  if (await leaseSelf(verifyLeaseSlots(lease), { env: gitEnv, purpose: phase })) return process.exitCode;
   const git = (...argv) => execFileSync('git', argv, { cwd: config.root, encoding: 'utf8', env: gitEnv }).trim();
   const head = git('rev-parse', 'HEAD'), tree = git('rev-parse', 'HEAD^{tree}');
   if (git('status', '--porcelain')) throw new Error('verification requires a clean committed checkout');

@@ -125,6 +125,29 @@ root `package.json` uses it without the setting. `release` then sets that `versi
 `bun.lock` and quick-start archives are npm-only and not touched. `publish` refuses such a package, and
 `packed-consumer` is npm-only.
 
+### Steps side by side
+
+`chain([...])` runs its entries one after another. An entry that is itself a list of steps is a group: they all
+start after the entry before it, and the entry after the group waits for all of them. A step's third element holds
+its options:
+
+```js
+browser: chain([
+  ["build", ["run", "build"]],
+  ["storybook", ["run", "storybook:build"]],
+  [["browser checks", ["run", "check:browser", "--", "--no-build"], { slots: 1 }],
+   ["story checks", ["run", "check:stories", "--", "--no-build"], { slots: 1 }],
+   ["control checks", ["run", "check:controls"], { slots: 1 }]],
+]),
+```
+
+`slots` is how many of the run's leased slots (`SLOTFATHER_COUNT`) a step holds while it runs: steps taking slots run
+side by side only as far as the lease goes, so the group above runs one check at a time under a one-slot lease and
+two under a two-slot one; outside a lease (a CI runner without slotfather) one at a time. A step asking more than
+the lease holds runs once no other slot-taking step does, and later slot-taking steps wait behind it. Steps without
+`slots` are limited by memory alone, as before. The step sees its share as
+`REPO_KIT_STEP_SLOTS`, for a check that sizes its own browser pool.
+
 ### Step memory
 
 verify plans its steps by the memory each declares, so declare it: a step left at 0 never waits for room, and on a
@@ -352,8 +375,15 @@ lanes. Keep the registry credentials available as for pre-push; the entry also r
 
 The managed entry prepares dependencies under a one-slot lease even for planning. Direct `repo-kit-lane
 --changed --base REF --plan --json` reads configuration and Git without running checks. Execution uses Repo-Kit's
-existing scheduler, cancellation and timeouts, with the selected suites' configured lease budget; `--jobs` caps
-automatically sized worker parallelism. Explicit per-step worker counts remain project configuration. `REPO_KIT_SLOT_LABEL`, `_PRIORITY`, `_TICKET`, `_META` and `_YIELDABLE` carry Lanefather's
+existing scheduler, cancellation and timeouts. It leases the slots Lanefather gives it with `--jobs` (its check
+contract: verify queues for its own `--jobs`-slot lease), no more than the selected suites' configured `slots` /
+`browserSlots`, and the configured ones without `--jobs`. Where slotfather gives a slot memory (`gib_per_slot`), the
+lease never holds less than the largest selected step's declared `memory`, which can exceed `--jobs`; a smaller lease
+also means a smaller memory budget for side-by-side steps. `REPO_KIT_VERIFY_SLOTS` still overrides it.
+`--jobs` also caps automatically sized worker parallelism. Leases are labelled by lane and phase (`REPO_KIT_SLOT_LABEL`
+plus the phase from `REPO_KIT_SLOT_META`, for example `lane-sk-api-surfaces check`), and elsewhere by project and
+command (`sid-kit verify`, `sid-kit release-gate`, `sid-kit check:stories`), never by a bare directory name.
+Steps that take `slots` share that lease (below). Explicit per-step worker counts remain project configuration. `REPO_KIT_SLOT_LABEL`, `_PRIORITY`, `_TICKET`, `_META` and `_YIELDABLE` carry Lanefather's
 execution context. The adapter honors `--keep-going` to collect independent results; ordinary `repo-kit verify`
 retains its fail-fast behavior. Reports and step logs live under the checkout's Git metadata, not in tracked source.
 

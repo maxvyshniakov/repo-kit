@@ -10,11 +10,14 @@ Versions and release rules: [README.md](README.md#versioning).
 - `verify.yml` and `browser.yml` take `junit` (and `junit-artifact`) to upload the JUnit reports their commands write; `repo-kit checks` writes per-check results and times as JUnit to `REPO_KIT_CHECKS_JUNIT`, which `browser.yml` uploads with them.
 - `repo-kit test-hygiene [--init|--update]`: shrink-only rules over test files with a baseline (`test-hygiene-baseline.json`): fixed sleeps (`sleep-ok: <reason>` allows one), timing assertions outside the perf suite (ported from Straylight's perf budget check; a perf-helper caller outside the perf suite fails), and opt-in class-name and CSS-text assertions (`testHygiene.ui`). It runs only where a repository adds it, and without `repo-kit.config.mjs` too.
 - `@maxvyshniakov/repo-kit/perf-budget`: `perfBudget(holds, message)` fails only under `REPO_KIT_PERF_BUDGETS=enforce` (the perf suite) and reports elsewhere.
+- `chain()` takes a list of steps as one entry: a group that runs side by side after the entry before it. A step's `slots` option bounds side-by-side steps by the run's lease, and the step sees its share as `REPO_KIT_STEP_SLOTS`.
 - `docs/templates/check.yml`: a caller running fast checks on main pushes, the full suite nightly and on release tags, skipping docs-only changes and verified trees.
 
 ### Changed
 
 - **Breaking for callers relying on the default runner:** `verify.yml`, `browser.yml`, `deploy-storybook.yml` and `release.yml` default `runner` to `'["ubuntu-latest"]'` instead of the maintainer's self-hosted labels. A private repository that wants its self-hosted runner passes `runner: '["self-hosted", "homelab"]'` (or its own labels) when it moves its workflow pins to this release. In a public repository a `runner` containing `self-hosted` runs the job on `ubuntu-latest` and fails its first step. The guard sees the `self-hosted` label only, and not on `schedule` runs, whose event carries no repository visibility; it does not replace keeping self-hosted runners off public repositories (SECURITY.md).
+- `repo-kit-lane` leases the slots Lanefather passes with `--jobs` (capped by the configured `slots`/`browserSlots`) instead of always the configured ones: a Sid-Kit lane check given one job held three slots and used 1.6 cores. Where a slot has memory, it still leases enough slots for its largest step; a smaller lease is also a smaller memory budget.
+- Slotfather lease labels name the project or lane and what runs (`sid-kit verify`, `lane-sk-api-surfaces check`, `sid-kit check:stories`) instead of the directory name, which in a worktree said nothing.
 
 ## 0.5.0 - 2026-11-11
 

@@ -5,7 +5,8 @@
 // REPO_KIT_SLOT_WAIT=<seconds> (or the older SID_KIT_SLOT_WAIT) gives up
 // waiting for the lease after that long: slotfather exits 75, so a CI job fails
 // with that reason instead of being cancelled at its time limit while queued.
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -31,8 +32,43 @@ export function slotWait(env = process.env) {
   return seconds > 0 ? seconds : 0;
 }
 
+/**
+ * The project a lease runs for: the main checkout's directory (the same in
+ * every worktree, unlike the worktree's own name), else package.json's
+ * unscoped name, else the directory.
+ */
+export function projectName(cwd = process.cwd()) {
+  try {
+    const common = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    if (path.basename(common) === ".git") return path.basename(path.dirname(common));
+  } catch { /* not a repository */ }
+  try {
+    const { name } = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8"));
+    if (name) return name.replace(/^@[^/]+\//, "");
+  } catch { /* no package.json */ }
+  return path.basename(cwd);
+}
+
+/** What a lease is for when the caller does not say: the package script that runs it, or the command's first words. */
+export function commandPurpose(command, env = process.env) {
+  if (env.npm_lifecycle_event) return env.npm_lifecycle_event;
+  const words = command.filter(word => !word.startsWith("-")).slice(0, 3).map(word => path.basename(word));
+  return words.join(" ") || "command";
+}
+
+/**
+ * The lease's label: who and what, never a bare directory name. A label from
+ * REPO_KIT_SLOT_LABEL (a lane's, say) gets the purpose appended unless it has
+ * one already (a space).
+ */
+export function slotLabel(purpose, { env = process.env, cwd = process.cwd() } = {}) {
+  const given = env.REPO_KIT_SLOT_LABEL;
+  if (given) return given.includes(" ") || !purpose ? given : `${given} ${purpose}`;
+  return `${projectName(cwd)} ${purpose}`;
+}
+
 /** The argv that runs `command` under a lease, or `command` itself when no lease applies. */
-export function leasedCommand(slots, command, { env = process.env, cwd = process.cwd(), slotfather = hasSlotfather(env) } = {}) {
+export function leasedCommand(slots, command, { env = process.env, cwd = process.cwd(), slotfather = hasSlotfather(env), purpose } = {}) {
   if (env.SLOTFATHER_LEASE || !slotfather) return command;
   const wait = slotWait(env);
   const context = [];
@@ -52,7 +88,8 @@ export function leasedCommand(slots, command, { env = process.env, cwd = process
     }
   }
   if (env.REPO_KIT_SLOT_YIELDABLE === "1") context.push("--yieldable");
-  return ["slotfather", "run", "-n", String(slots), "--label", env.REPO_KIT_SLOT_LABEL || path.basename(cwd),
+  const label = env.REPO_KIT_SLOT_LABEL && !purpose ? env.REPO_KIT_SLOT_LABEL : slotLabel(purpose ?? commandPurpose(command, env), { env, cwd });
+  return ["slotfather", "run", "-n", String(slots), "--label", label,
     ...context, ...(wait ? ["--wait", String(wait)] : []), "--", ...command];
 }
 
@@ -65,8 +102,8 @@ export function leasedCommand(slots, command, { env = process.env, cwd = process
  * child starts: the child writes to the same stdout, so whoever reads it can
  * signal this process before spawn's caller runs another line.
  */
-export function runLeased(slots, command, { env = process.env, cwd = process.cwd(), input, spawn: start = spawn } = {}) {
-  const argv = leasedCommand(slots, command, { env, cwd });
+export function runLeased(slots, command, { env = process.env, cwd = process.cwd(), input, purpose, spawn: start = spawn } = {}) {
+  const argv = leasedCommand(slots, command, { env, cwd, purpose });
   const [file, ...args] = argv;
   const leased = argv !== command;
   // A signal is caught from here on and handled on the event loop, by when
@@ -105,8 +142,8 @@ export function runLeased(slots, command, { env = process.env, cwd = process.cwd
  * no slotfather; resolves to whether it did (process.exitCode then holds the
  * leased run's code).
  */
-export async function leaseSelf(slots, { env = process.env, input } = {}) {
+export async function leaseSelf(slots, { env = process.env, input, purpose = process.argv.slice(2, 4).map(arg => arg.replace(/^-+/, "")).join(" ") || "repo-kit" } = {}) {
   if (env.SLOTFATHER_LEASE || !hasSlotfather(env)) return false;
-  process.exitCode = await runLeased(slots, [process.execPath, ...process.argv.slice(1)], { env, input });
+  process.exitCode = await runLeased(slots, [process.execPath, ...process.argv.slice(1)], { env, input, purpose });
   return true;
 }

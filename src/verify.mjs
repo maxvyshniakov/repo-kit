@@ -39,7 +39,10 @@ const USES_CORES_BASE_GIB = 0.25;
  * pass first), memory? (GiB it holds at its peak; 0 when left out), usesCores?
  * (test workers from the run's cores and memory; `memory` is then what it holds
  * besides them), workers? (a fixed worker count), timeout? (minutes it may run;
- * `stepTimeout` when left out, 0 for no limit) }. `needs` defaults to [].
+ * `stepTimeout` when left out, 0 for no limit), slots? (the run's slots it
+ * holds while it runs: steps that take slots run side by side only as far as
+ * the run's lease goes; it sees its share as REPO_KIT_STEP_SLOTS) }. `needs`
+ * defaults to [].
  */
 export function normalizeSteps(steps, { stepTimeout = 0 } = {}) {
   const seen = new Set();
@@ -49,6 +52,7 @@ export function normalizeSteps(steps, { stepTimeout = 0 } = {}) {
     if (step.memory !== undefined && !(step.memory >= 0)) throw new Error(`verify step "${step.name}": memory is GiB, a number of 0 or more`);
     if (step.workers !== undefined && !(Number.isInteger(step.workers) && step.workers > 0)) throw new Error(`verify step "${step.name}": workers is a positive integer`);
     if (step.workers && step.usesCores) throw new Error(`verify step "${step.name}": usesCores and workers exclude each other`);
+    if (step.slots !== undefined && !(Number.isInteger(step.slots) && step.slots > 0)) throw new Error(`verify step "${step.name}": slots is a positive integer`);
     if (step.timeout !== undefined && !(step.timeout >= 0)) throw new Error(`verify step "${step.name}": timeout is minutes, a number of 0 (no limit) or more`);
     const needs = step.needs ?? [];
     for (const need of needs) {
@@ -59,9 +63,33 @@ export function normalizeSteps(steps, { stepTimeout = 0 } = {}) {
   });
 }
 
-/** Steps that run one after another: [[name, command], ...]. */
-export function chain(steps) {
-  return steps.map(([name, command], index) => ({ name, command, needs: index ? [steps[index - 1][0]] : [] }));
+/**
+ * Steps that run one after another: [[name, command, options?], ...]. An entry
+ * that is a list of such steps is a group: its steps run side by side after the
+ * entry before it, and the entry after it waits for all of them. Options (for
+ * example { slots: 1 }) go into the step.
+ */
+export function chain(entries) {
+  const steps = [];
+  let previous = [];
+  for (const entry of entries) {
+    const group = Array.isArray(entry[0]) ? entry : [entry];
+    if (!entry.length) throw new Error("chain: an empty group");
+    for (const [name, command, options = {}] of group) {
+      if (!options || typeof options !== "object" || Array.isArray(options)) throw new Error(`chain: the options of "${name}" are an object, such as { slots: 1 }`);
+      steps.push({ ...options, name, command, needs: [...previous] });
+    }
+    previous = group.map(([name]) => name);
+  }
+  return steps;
+}
+
+/**
+ * The slots of the run's lease, which steps that take slots share. Without a
+ * lease (a CI runner without slotfather) one: such steps run one at a time.
+ */
+export function runSlots(env = process.env) {
+  return leasedSlots(env) || 1;
 }
 
 export function verifySteps(config, { release = false, browser = false } = {}) {
@@ -94,7 +122,7 @@ function leasedSlots(env) {
 
 let capacityCache;
 /** slotfather's capacity (`slotfather advise`: total slots, gib_per_slot), or {} without slotfather. */
-function readCapacity() {
+export function readCapacity() {
   if (!capacityCache) {
     try {
       capacityCache = JSON.parse(execFileSync("slotfather", ["advise"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
@@ -162,10 +190,11 @@ export function sizeSteps(steps, { workers, workerMemory = WORKER_MEMORY_GIB }) 
  * An aborted `signal` stops every running step in either mode. Resolves, once every started step has ended, to { name,
  * status: "ok" | "fail" | "stopped", seconds } per started step.
  */
-export async function runSteps(steps, start, { now = Date.now, signal, memory = Infinity, keepGoing = false } = {}) {
+export async function runSteps(steps, start, { now = Date.now, signal, memory = Infinity, slots = Infinity, keepGoing = false } = {}) {
   const results = new Map();
   const running = new Map();
   let held = 0;
+  let heldSlots = 0;
   let halted = false;
   const halt = reason => {
     halted = true;
@@ -173,18 +202,28 @@ export async function runSteps(steps, start, { now = Date.now, signal, memory = 
   };
   await new Promise(resolve => {
     const launch = () => {
+      // Once a slot-taking step waits, later ones wait behind it: a big step is not starved by small ones.
+      let slotWaiting = false;
       for (const step of halted ? [] : steps) {
         if (results.has(step.name) || running.has(step.name)) continue;
         if (!step.needs.every(need => results.get(need)?.status === "ok")) continue;
         const needed = step.memory ?? 0;
         if (running.size && held + needed > memory) continue;
+        // A step asking more than the run has runs once no other slot-taking step does.
+        const taken = Math.min(step.slots ?? 0, slots);
+        if (taken && (slotWaiting || (heldSlots && heldSlots + taken > slots))) {
+          slotWaiting = true;
+          continue;
+        }
         held += needed;
+        heldSlots += taken;
         const started = now();
         const handle = start(step);
         running.set(step.name, handle);
         handle.done.then(passed => {
           running.delete(step.name);
           held -= needed;
+          heldSlots -= taken;
           const status = passed ? "ok" : handle.stopped ? "stopped" : "fail";
           results.set(step.name, { name: step.name, status, seconds: (now() - started) / 1000, ...(handle.timedOut ? { timedOut: true } : {}) });
           if (status === "fail" && !halted && !keepGoing) halt("SIGTERM");
@@ -488,6 +527,7 @@ function signalStep(pid, processes, signal) {
 function startProcess(step, { root, running, mark, processes = () => [], onLine = () => {}, environment = process.env }) {
   const env = { ...environment, [STEP_MARK]: mark };
   if (step.workers) env.VITEST_MAX_WORKERS = env.REPO_KIT_WORKERS = String(step.workers);
+  if (step.slots) env.REPO_KIT_STEP_SLOTS = String(Math.min(step.slots, runSlots(environment)));
   // Each step gets its own process group, so stopping it reaches its workers too.
   const child = spawn("bun", step.command, { cwd: root, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
   // Output streams live, each line prefixed with its step, so a step that hangs is visible.
@@ -560,8 +600,8 @@ function startProcess(step, { root, running, mark, processes = () => [], onLine 
 
 /** Runs the gate in `root`; sets process.exitCode rather than exiting, so piped output drains. */
 export async function runVerify(config, { release = false, browser = false, steps: declaredSteps, onLine, maxCores = Infinity, env = process.env, keepGoing = false } = {}) {
-  const cores = Math.min(verifyCores(), maxCores);
-  const memory = verifyMemory();
+  const cores = Math.min(verifyCores(env), maxCores);
+  const memory = verifyMemory(env);
   const { workerMemory } = config.verify;
   const workers = unitTestWorkers(cores, memory, workerMemory);
   const steps = sizeSteps(declaredSteps ?? verifySteps(config, { release, browser }), { workers, workerMemory });
@@ -608,7 +648,7 @@ export async function runVerify(config, { release = false, browser = false, step
       });
     }
     return handle;
-  }, { signal: interrupt.signal, memory, keepGoing });
+  }, { signal: interrupt.signal, memory, slots: runSlots(env), keepGoing });
   const peak = memorySamples.stop();
   reaper.done();
   for (const { name, timedOut } of results.filter(result => result.status === "fail")) {

@@ -115,10 +115,10 @@ test("the kit version is package.json's", () => {
 });
 
 test("a heavy command leases once, and runs directly without slotfather", () => {
-  assert.deepEqual(leasedCommand(2, ["bun", "run", "x"], { env: {}, cwd: "/repo/sid-kit", slotfather: true }), ["slotfather", "run", "-n", "2", "--label", "sid-kit", "--", "bun", "run", "x"]);
+  assert.deepEqual(leasedCommand(2, ["bun", "run", "x"], { env: {}, cwd: "/repo/sid-kit", slotfather: true }), ["slotfather", "run", "-n", "2", "--label", "sid-kit bun run x", "--", "bun", "run", "x"]);
   assert.deepEqual(leasedCommand(2, ["bun"], { env: { SLOTFATHER_LEASE: "outer" }, cwd: "/repo", slotfather: true }), ["bun"]);
   assert.deepEqual(leasedCommand("all", ["bun"], { env: {}, cwd: "/repo", slotfather: false }), ["bun"]);
-  assert.deepEqual(leasedCommand(2, ["bun"], { env: { REPO_KIT_SLOT_WAIT: "2400" }, cwd: "/repo/sid-kit", slotfather: true }), ["slotfather", "run", "-n", "2", "--label", "sid-kit", "--wait", "2400", "--", "bun"], "a lease that gives up after REPO_KIT_SLOT_WAIT");
+  assert.deepEqual(leasedCommand(2, ["bun"], { env: { REPO_KIT_SLOT_WAIT: "2400" }, cwd: "/repo/sid-kit", slotfather: true }), ["slotfather", "run", "-n", "2", "--label", "sid-kit bun", "--wait", "2400", "--", "bun"], "a lease that gives up after REPO_KIT_SLOT_WAIT");
   assert.deepEqual(leasedCommand(2, ["bun"], { env: { SID_KIT_SLOT_WAIT: "60" }, cwd: "/repo", slotfather: true }).slice(6, 8), ["--wait", "60"], "the older name still works");
   assert.deepEqual(leasedCommand(2, ["bun"], { env: { REPO_KIT_SLOT_WAIT: "0" }, cwd: "/repo", slotfather: true }).includes("--wait"), false);
 });
@@ -200,6 +200,18 @@ test("self hook sync retires only its unchanged old branch guard", () => {
   assert.throws(()=>syncHooks(repository.root),/customized/);
   assert.equal(fs.readFileSync(guard,"utf8"),"custom guard");
  } finally {repository.cleanup();}
+});
+
+test("a lease label names the project and what runs, never a bare directory", async () => {
+  const { slotLabel, projectName } = await import("../src/heavy.mjs");
+  // A worktree's own directory is not the project: the main checkout's is.
+  assert.equal(projectName(kitRoot), "repo-kit");
+  assert.equal(slotLabel("release-gate", { env: {}, cwd: kitRoot }), "repo-kit release-gate");
+  assert.equal(slotLabel("check", { env: { REPO_KIT_SLOT_LABEL: "lane-sk-api-surfaces" } }), "lane-sk-api-surfaces check");
+  assert.equal(slotLabel("check", { env: { REPO_KIT_SLOT_LABEL: "lane-x post-merge" } }), "lane-x post-merge");
+  // repo-kit heavy under a package script names the script.
+  assert.equal(leasedCommand(2, ["bun", "scripts/run-story-checks.mjs"], { env: { npm_lifecycle_event: "check:stories" }, cwd: "/repo/sid-kit", slotfather: true })[5], "sid-kit check:stories");
+  assert.equal(leasedCommand(1, ["node", "x.mjs"], { env: { REPO_KIT_SLOT_LABEL: "lane-a" }, purpose: "check", cwd: "/r", slotfather: true })[5], "lane-a check");
 });
 
 test('a configured lane carries named request fields and metadata into the execution lease', () => {

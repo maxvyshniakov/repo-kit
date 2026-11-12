@@ -73,7 +73,7 @@ export async function main([command, ...args]) {
     case "verify": {
       const browser = args.includes("--browser");
       const { leaseSelf, verifyLeaseSlots } = await import("./heavy.mjs");
-      if (await leaseSelf(verifyLeaseSlots(browser ? config.verify.browserSlots : config.verify.slots))) return process.exitCode;
+      if (await leaseSelf(verifyLeaseSlots(browser ? config.verify.browserSlots : config.verify.slots), { purpose: browser ? "verify browser" : "verify" })) return process.exitCode;
       const { runVerify } = await import("./verify.mjs");
       await runVerify(config, { release: args.includes("--release"), browser });
       return process.exitCode;
@@ -82,7 +82,7 @@ export async function main([command, ...args]) {
       const [{ leaseSelf }, { parseShootArgs, runShoot }] = await Promise.all([import("./heavy.mjs"), import("./shoot.mjs")]);
       // Bad arguments fail before the lease, not after a wait for it.
       parseShootArgs(args, { root: config.root, shoot: config.shoot });
-      if (await leaseSelf(config.shoot.slots)) return process.exitCode;
+      if (await leaseSelf(config.shoot.slots, { purpose: "shoot" })) return process.exitCode;
       return runShoot(config, args);
     }
     case "pre-push": {
@@ -93,7 +93,7 @@ export async function main([command, ...args]) {
       const stdin = fs.readFileSync(0, "utf8");
       const { passed, left } = pushedCommits(stdin, undefined, config.prePush.releaseBranches);
       if (!left.length) return reportPassed(passed), 0;
-      if (await leaseSelf(config.prePush.slots, { input: stdin })) return process.exitCode;
+      if (await leaseSelf(config.prePush.slots, { input: stdin, purpose: "pre-push" })) return process.exitCode;
       return runPrePush({ stdin, releaseBranches: config.prePush.releaseBranches });
     }
     case "hooks": {

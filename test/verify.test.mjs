@@ -226,7 +226,9 @@ test("verify leases REPO_KIT_VERIFY_SLOTS when set, as CI's verify.yml sets it, 
     assert.equal(verify([], { REPO_KIT_VERIFY_SLOTS: "all" }).status, 0);
     assert.equal(verify(["--browser"], { REPO_KIT_VERIFY_SLOTS: "all" }).status, 0);
     const leases = fs.readFileSync(calls, "utf8").trim().split("\n").map(line => line.split(" -- ")[0]);
-    assert.deepEqual(leases, ["run -n 1 --label " + path.basename(repository.root), "run -n 2 --label " + path.basename(repository.root), "run -n all --label " + path.basename(repository.root), "run -n all --label " + path.basename(repository.root)]);
+    // The fixture is no Git repository: its package.json names the project.
+    const project = "fake";
+    assert.deepEqual(leases, [`run -n 1 --label ${project} verify`, `run -n 2 --label ${project} verify browser`, `run -n all --label ${project} verify`, `run -n all --label ${project} verify browser`]);
   } finally {
     repository.cleanup();
   }
@@ -557,4 +559,84 @@ while :; do sleep 0.1; done
     repository.cleanup();
     fs.rmSync(marks, { force: true });
   }
+});
+
+test("chain runs a nested group side by side after the step before it, and the next step after all of them", () => {
+  const steps = chain([
+    ["build", ["run", "build"]],
+    [["browser", ["run", "check:browser"], { slots: 1 }], ["stories", ["run", "check:stories"], { slots: 1 }]],
+    ["report", ["run", "report"]],
+  ]);
+  assert.deepEqual(steps.map(({ name, needs, slots }) => [name, needs, slots]), [
+    ["build", [], undefined],
+    ["browser", ["build"], 1],
+    ["stories", ["build"], 1],
+    ["report", ["browser", "stories"], undefined],
+  ]);
+  // A flat chain is what it always was.
+  assert.deepEqual(chain([["a", ["x"]], ["b", ["y"]]]).map(({ needs }) => needs), [[], ["a"]]);
+  assert.deepEqual(normalizeSteps(steps).map(({ slots }) => slots), [undefined, 1, 1, undefined]);
+  assert.throws(() => normalizeSteps([{ name: "a", command: [], slots: 0 }]), /slots is a positive integer/);
+  assert.throws(() => chain([["a", ["x"], "slots"]]), /options of "a" are an object/);
+  assert.throws(() => chain([[]]), /empty group/);
+});
+
+test("runSteps runs steps that take slots side by side only as far as the run's slots go", async () => {
+  const steps = [
+    { name: "storybook", needs: [] },
+    { name: "browser", needs: ["storybook"], slots: 1 },
+    { name: "stories", needs: ["storybook"], slots: 1 },
+    { name: "controls", needs: ["storybook"], slots: 1 },
+    { name: "light", needs: ["storybook"] },
+  ];
+  const { started, start, settle } = fakeStarts();
+  const run = runSteps(steps, start, { now: () => 0, slots: 2 });
+  await settle("storybook", true);
+  // Two slot-taking steps at once; a step that takes none starts beside them.
+  assert.deepEqual(started, ["storybook", "browser", "stories", "light"]);
+  await settle("stories", true);
+  assert.deepEqual(started, ["storybook", "browser", "stories", "light", "controls"]);
+  for (const name of ["browser", "controls", "light"]) await settle(name, true);
+  assert.equal((await run).length, 5);
+});
+
+test("a step asking more slots than the run has still runs, alone among the slot-taking steps", async () => {
+  const steps = [{ name: "big", needs: [], slots: 3 }, { name: "small", needs: [], slots: 1 }];
+  const { started, start, settle } = fakeStarts();
+  const run = runSteps(steps, start, { now: () => 0, slots: 1 });
+  assert.deepEqual(started, ["big"]);
+  await settle("big", true);
+  assert.deepEqual(started, ["big", "small"]);
+  await settle("small", true);
+  await run;
+});
+
+test("a waiting big slot step holds back later small ones, so it is not starved", async () => {
+  const steps = [{ name: "a", needs: [], slots: 1 }, { name: "big", needs: [], slots: 2 }, { name: "b", needs: [], slots: 1 }];
+  const { started, start, settle } = fakeStarts();
+  const run = runSteps(steps, start, { now: () => 0, slots: 2 });
+  assert.deepEqual(started, ["a"]);
+  await settle("a", true);
+  assert.deepEqual(started, ["a", "big"]);
+  await settle("big", true);
+  await settle("b", true);
+  await run;
+});
+
+test("without a slot count every step that is ready starts, as before", async () => {
+  const steps = [{ name: "a", needs: [], slots: 1 }, { name: "b", needs: [], slots: 1 }];
+  const { started, start, settle } = fakeStarts();
+  const run = runSteps(steps, start, { now: () => 0 });
+  assert.deepEqual(started, ["a", "b"]);
+  await settle("a", true);
+  await settle("b", true);
+  await run;
+});
+
+test("the run's slots: SLOTFATHER_COUNT under a lease, else one", async () => {
+  const { runSlots } = await import("../src/verify.mjs");
+  assert.equal(runSlots({ SLOTFATHER_LEASE: "x", SLOTFATHER_COUNT: "2" }), 2);
+  // Without a lease (a CI runner), slot-taking steps run one at a time.
+  assert.equal(runSlots({ SLOTFATHER_COUNT: "2" }), 1);
+  assert.equal(runSlots({}), 1);
 });

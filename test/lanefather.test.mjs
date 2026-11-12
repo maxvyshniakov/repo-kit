@@ -270,3 +270,21 @@ test('keep-going collects independent results after a failure and blocks only de
     assert.deepEqual(report.checks[2].blocked_by, ['verify:broken']);
   } finally { repo.cleanup(); }
 });
+
+test('the adapter leases the slots Lanefather gives it with --jobs, no more than the configured ones', async () => {
+  const { laneLeaseSlots } = await import('../src/lanefather.mjs');
+  const config = { verify: { slots: 3, browserSlots: 2 } };
+  const verify = [{ suite: 'verify' }], both = [{ suite: 'verify' }, { suite: 'browser' }], browser = [{ suite: 'browser' }];
+  // Lanefather decided one job: one slot, not the configured three.
+  assert.equal(laneLeaseSlots(config, both, 1), 1);
+  assert.equal(laneLeaseSlots(config, both, 2), 2);
+  assert.equal(laneLeaseSlots(config, both, 8), 3);
+  assert.equal(laneLeaseSlots(config, browser, 8), 2);
+  // Without --jobs, the configured slots of the selected suites, as before.
+  assert.equal(laneLeaseSlots(config, both, Infinity), 3);
+  assert.equal(laneLeaseSlots(config, verify, Infinity), 3);
+  // Where a slot has memory, a lease holds the largest step: 6 GiB at 5 GiB a slot takes 2.
+  const heavy = [{ suite: 'browser', step: { memory: 6 } }, { suite: 'verify', step: { memory: 1 } }];
+  assert.equal(laneLeaseSlots(config, heavy, 1, { gibPerSlot: 5 }), 2);
+  assert.equal(laneLeaseSlots(config, heavy, 1), 1, 'a machine without slot memory: the jobs');
+});
