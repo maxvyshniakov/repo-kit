@@ -220,6 +220,8 @@ test("verify leases REPO_KIT_VERIFY_SLOTS when set, as CI's verify.yml sets it, 
     delete env.REPO_KIT_VERIFY_SLOTS;
     delete env.REPO_KIT_SLOT_WAIT;
     delete env.SID_KIT_SLOT_WAIT;
+    // The caller's own lease context (a lane, an agent's priority) is not the fixture's.
+    for (const name of Object.keys(env)) if (name.startsWith("REPO_KIT_SLOT_")) delete env[name];
     const verify = (args, extra = {}) => spawnSync(process.execPath, [cli, "verify", ...args], { cwd: repository.root, env: { ...env, ...extra }, encoding: "utf8" });
     assert.equal(verify([]).status, 0);
     assert.equal(verify(["--browser"]).status, 0);
