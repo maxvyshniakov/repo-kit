@@ -195,6 +195,7 @@ Re-measure after a change that adds tests or stories; a peak above its declared 
 | `shoot <story id filter...> [<url>\|--url=] [--theme=] [--width=] [--browser=] [--out=] [--viewport]` | [Story screenshots](#story-screenshots) from a running Storybook, under a lease of `shoot.slots`. |
 | `test-hygiene [--init\|--update]` | [Shrink-only test rules](#test-hygiene): fixed sleeps, timing assertions outside the perf suite and, opt-in, class-name and CSS-text assertions. Runs without `repo-kit.config.mjs` too. |
 | `verified-tree` | In a workflow: links each `REPO_KIT_PLANS` plan to a passed result of the same tree ([skipping a verified tree](#skipping-a-verified-tree)). |
+| `friction <log\|report\|export>` | The local [friction journal](#friction-journal): writes an event, ranks the journal, writes a redacted bundle to share. Needs no `repo-kit.config.mjs`. |
 
 ## Test hygiene
 
@@ -250,6 +251,57 @@ Nothing runs until a repository adds the step, so a release of the kit turns no 
   root in `tools/check.py`, or a CI step. Measured: 23 fixed sleeps and 9 timing assertions in 85 test files,
   among them godfather's four `assertLess(time.monotonic() - started, ...)`.
 - A scan of a few hundred test files takes 0.1–0.5 s.
+
+## Friction journal
+
+Moments an agent misread or misused a package, one JSON line each, so a retro
+starts from counts instead of transcripts. Producers: `repo-kit friction log`
+(by hand, or by an agent when the package's skill says so), Sid-Kit's
+`sid-kit-lint` (findings beyond the baseline), and optional Claude Code hooks and
+transcript scanners (mastack). Everything stays on the machine.
+
+- File: `FRICTION_JOURNAL`, else `$XDG_STATE_HOME/friction/events.jsonl`, else
+  `~/.local/state/friction/events.jsonl` (directory 0700, file 0600).
+  `FRICTION_JOURNAL=off` turns every writer off; `--journal FILE` reads or
+  writes another file. Each event is one `write` with `O_APPEND`, so concurrent
+  writers keep lines whole.
+- Schema version 1 (`v: 1`). Readers skip lines of other versions and count
+  them; unknown extra fields are kept and ignored. Renaming or retyping a field
+  is version 2.
+
+| Field | Required | Meaning |
+|---|---|---|
+| `v` | yes | `1` |
+| `ts` | yes | ISO 8601 UTC time of the moment |
+| `project` | yes | consuming repository (a linked worktree names its main repository) |
+| `package` | yes | npm name of the package the friction is about |
+| `kind` | yes | `lint-finding`, `selector-reach-in`, `type-error`, `owner-correction`, `misuse`, `vendored-patch`, `review-finding`, `note` |
+| `component` | | the export involved, e.g. `Button` |
+| `rule` | | lint rule, TypeScript code (`TS2322`) or review category |
+| `detail` | | local text, at most 500 characters; never exported as written |
+| `session` | | agent session id: `FRICTION_SESSION`, `CLAUDE_CODE_SESSION_ID` or `CODEX_SESSION_ID` |
+| `source` | yes | the writer (`repo-kit`, `sid-kit-lint`, `mastack-hook`, ...) |
+| `why` | | why a hook or scanner flagged it |
+| `file` | | path relative to the project, or to the package for a vendored copy |
+| `fingerprint` | | stable key of the underlying fact, so repeats count apart from distinct facts |
+
+```sh
+repo-kit friction log --package @scope/kit --kind owner-correction --component Item \
+  --detail "Item clamps its description; full text goes in ItemBody"
+repo-kit friction report --since 30d            # kinds, packages, top components, rules and triples
+repo-kit friction report --package @scope/kit --json
+repo-kit friction export --since 30d --out friction.json
+```
+
+`report` counts events, distinct facts (fingerprints), sessions and projects per
+row. `export` writes the bundle a person reads and sends: package, component,
+rule and kind with those counts and a template paraphrase ("TS2322 type error on
+Button"), and the period as two dates. It leaves out projects, sessions, files,
+times and every `detail`; a component or rule that is not an identifier becomes
+`(other)`, an event whose package is not an npm name is dropped. `--notes` adds
+up to three notes per row from corrections, misuse, review findings and notes,
+redacted to at most 12 words with code, paths, URLs, addresses and long numbers
+removed. Nothing is uploaded.
 
 ## Changelog entries
 

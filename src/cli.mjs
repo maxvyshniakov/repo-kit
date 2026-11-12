@@ -27,6 +27,7 @@ const USAGE = `Usage: repo-kit <command>
   publish [--resume]
   notify                           request publish.notify's workflows again
   tls                              the Bun TLS gate
+  friction <log|report|export>     the local agent friction journal (repo-kit friction help)
   packed-consumer [--keep]`;
 
 export async function main([command, ...args]) {
@@ -60,6 +61,10 @@ export async function main([command, ...args]) {
       config = { root: execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim() };
     }
     return runTestHygiene({ root: config.root, config, args });
+  }
+  if (command === "friction") {
+    const { runFriction } = await import("./friction.mjs");
+    return runFriction(args);
   }
   if (command === "tls") {
     const { runTlsGate } = await import("./tls.mjs");

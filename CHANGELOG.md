@@ -4,6 +4,10 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+### Added
+
+- `repo-kit friction log|report|export`: a local, append-only journal of moments agents misread or misuse a package (schema version 1, `~/.local/state/friction/events.jsonl`, `FRICTION_JOURNAL` moves or turns it off). `report` ranks kinds, components and rules over a period; `export` writes a redacted bundle (counts and paraphrases, no projects, sessions, files or detail text) for a person to send. Runs without a `repo-kit.config.mjs` and never uploads anything.
+
 ## 0.6.2 - 2026-11-13
 
 ### Fixed

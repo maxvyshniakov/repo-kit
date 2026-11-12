@@ -198,8 +198,9 @@ went through lane landing still needs separate publication reconciliation.
 | Publish that verified revision | `repo-kit publish` |
 | Capture a catalog story | `repo-kit shoot` |
 | Keep fixed sleeps and timing asserts out of tests, shrink-only | `repo-kit test-hygiene` |
+| Record and rank agent friction with packages | `repo-kit friction log\|report\|export` |
 
-[Full command reference](docs/reference.md#commands) · [Story screenshots](docs/reference.md#story-screenshots)
+[Full command reference](docs/reference.md#commands) · [Story screenshots](docs/reference.md#story-screenshots) · [Friction journal](docs/reference.md#friction-journal)
 
 ## Release gate
 
