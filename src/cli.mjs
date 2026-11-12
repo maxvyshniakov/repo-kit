@@ -11,6 +11,7 @@ const USAGE = `Usage: repo-kit <command>
         [--browser=chromium,firefox,webkit,safari] [--out=<dir>] [--viewport]
                                    screenshot Storybook stories, under a lease of shoot.slots
   checks                           run REPO_KIT_CHECKS' list of {name, run} in order, as browser.yml does
+  verified-tree                    in a workflow: link each REPO_KIT_PLANS plan to a passed result of this tree
   hooks <install|sync|check|status>
   check                            managed hooks, workflow references and packageManager match the kit
   check-changelogs [--release]
@@ -37,6 +38,10 @@ export async function main([command, ...args]) {
   if (command === "checks") {
     const { parseChecks, runChecks } = await import("./checks.mjs");
     return runChecks(parseChecks(process.env.REPO_KIT_CHECKS));
+  }
+  if (command === "verified-tree") {
+    const { runVerifiedTree } = await import("./verified-tree.mjs");
+    return runVerifiedTree();
   }
   if (command === "tls") {
     const { runTlsGate } = await import("./tls.mjs");

@@ -1,0 +1,42 @@
+name: Look up a passed result of this tree
+description: >-
+  Compares the workflow commit's tree with the commits of a few branches and a
+  pull request's head, and writes, per plan, a link to a passed check or commit
+  status that the plan accepts on a commit with the same tree. Runs with Node
+  alone: no checkout, no install. The token needs contents, checks and statuses and actions: read.
+inputs:
+  plans:
+    description: 'JSON object: plan name to the check names or status contexts that count as passing it; a trailing * accepts a prefix.'
+    required: true
+  branches:
+    description: JSON list of branches whose commits are compared.
+    default: '["main", "dev"]'
+  depth:
+    description: Newest commits of each branch compared.
+    default: "100"
+  force:
+    description: '"true" runs every plan without looking.'
+    default: "false"
+  token:
+    description: Token reading commits, check runs, commit statuses and workflow runs.
+    default: ${{ github.token }}
+outputs:
+  urls:
+    description: 'JSON object: plan name to the link of the result it reuses, or "" when the plan runs.'
+    value: ${{ steps.lookup.outputs.urls }}
+  tree:
+    description: The commit's tree hash.
+    value: ${{ steps.lookup.outputs.tree }}
+runs:
+  using: composite
+  steps:
+    - id: lookup
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/../../src/verified-tree.mjs"
+      env:
+        REPO_KIT_PLANS: ${{ inputs.plans }}
+        REPO_KIT_BRANCHES: ${{ inputs.branches }}
+        REPO_KIT_DEPTH: ${{ inputs.depth }}
+        REPO_KIT_FORCE: ${{ inputs.force }}
+        REPO_KIT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        GITHUB_TOKEN: ${{ inputs.token }}

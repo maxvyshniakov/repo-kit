@@ -36,14 +36,14 @@ const releaseArgs = "RELEASE_ARGS: ${{ (github.ref == 'refs/heads/main' || githu
 test("verify.yml passes --release for main and pull requests into main only", () => {
   const text = read(path.join(workflowsDir, "verify.yml"));
   assert.ok(text.includes(releaseArgs));
-  assert.match(text, /- run: bun run verify -- \$RELEASE_ARGS \$VERIFY_ARGS\n/);
+  assert.match(text, /\n {8}run: bun run verify -- \$RELEASE_ARGS \$VERIFY_ARGS\n/);
   assert.match(text, /args:\n(?:\s+\w.*\n)*?\s+default: ""\n/, "args must not default to --release");
 });
 
 test("verify.yml checks out one commit unless the caller asks for history", () => {
   const text = read(path.join(workflowsDir, "verify.yml"));
   assert.match(text, /fetch-depth:\n(?:\s+\w.*\n)*?\s+default: 1\n/);
-  assert.match(text, /- uses: actions\/checkout@[0-9a-f]{40}\n {8}with:\n {10}fetch-depth: \$\{\{ inputs\.fetch-depth \}\}\n/);
+  assert.match(text, / {8}uses: actions\/checkout@[0-9a-f]{40}\n {8}with:\n {10}fetch-depth: \$\{\{ inputs\.fetch-depth \}\}\n/);
 });
 
 test("repo-kit's own main checks use the current action and ordinary verification", () => {
@@ -57,7 +57,7 @@ test("repo-kit's own main checks use the current action and ordinary verificatio
 
 test("browser.yml builds once and runs every check after it in one job, under one lease", () => {
   const browser = read(path.join(workflowsDir, "browser.yml"));
-  assert.match(browser, /- run: node_modules\/\.bin\/repo-kit heavy "\$SLOTS" sh -c 'eval "\$BUILD" && node_modules\/\.bin\/repo-kit checks'\n/);
+  assert.match(browser, /\n {8}run: node_modules\/\.bin\/repo-kit heavy "\$SLOTS" sh -c 'eval "\$BUILD" && node_modules\/\.bin\/repo-kit checks'\n/);
   assert.match(browser, /REPO_KIT_CHECKS: \$\{\{ inputs\.checks \}\}\n/);
   // A job per check built Storybook once per check: three builds at once broke
   // Sid-Kit 0.41.1's checks on a self-hosted runner with a 10 GiB cap.
@@ -73,9 +73,9 @@ test("browser.yml builds once and runs every check after it in one job, under on
 
 test("every heavy step of the reusable workflows runs under a lease of the whole runner by default", () => {
   const leased = {
-    "verify.yml": /- run: bun run verify -- \$RELEASE_ARGS \$VERIFY_ARGS\n/,
+    "verify.yml": /\n {8}run: bun run verify -- \$RELEASE_ARGS \$VERIFY_ARGS\n/,
     "deploy-storybook.yml": /run: node_modules\/\.bin\/repo-kit heavy "\$SLOTS" sh -c 'bun run build && bun run storybook:build'\n/,
-    "browser.yml": /- run: node_modules\/\.bin\/repo-kit heavy "\$SLOTS" sh -c 'eval "\$BUILD" && node_modules\/\.bin\/repo-kit checks'\n/,
+    "browser.yml": /\n {8}run: node_modules\/\.bin\/repo-kit heavy "\$SLOTS" sh -c 'eval "\$BUILD" && node_modules\/\.bin\/repo-kit checks'\n/,
     "release.yml": /run: node_modules\/\.bin\/repo-kit heavy "\$SLOTS" sh -c 'eval "\$COMMAND"'\n/,
   };
   for (const [file, step] of Object.entries(leased)) {
@@ -95,7 +95,7 @@ test("every heavy step of the reusable workflows runs under a lease of the whole
 test("third-party actions are pinned by commit SHA", () => {
   const files = [...fs.readdirSync(workflowsDir).map(file => path.join(workflowsDir, file)), path.join(kitRoot, "actions/setup-bun/action.yml")];
   for (const file of files) {
-    for (const [, target] of read(file).matchAll(/uses: ([^\s]+)/g)) {
+    for (const [, target] of read(file).matchAll(/(?<!\w)uses: ([^\s]+)/g)) {
       if (target.startsWith("./") || target.startsWith("maxvyshniakov/repo-kit/")) continue;
       assert.match(target, /@[0-9a-f]{40}$/, `${path.basename(file)}: ${target}`);
     }
@@ -207,4 +207,99 @@ test("reusable workflows default to a GitHub-hosted runner and refuse a self-hos
     assert.ok(first.includes(`if: \${{ ${publicSelfHosted} }}`), file);
     assert.match(first, /exit 1/, file);
   }
+});
+
+const UPLOAD_ARTIFACT = "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9";
+const stepsOf = text => text.slice(text.indexOf("\n    steps:\n")).split("\n      - ").slice(1);
+
+test("verified-tree.yml looks the tree up with read-only tokens and no checkout, on a GitHub-hosted runner by default", () => {
+  const text = read(path.join(workflowsDir, "verified-tree.yml"));
+  assert.match(text, /^on:\n {2}workflow_call:\n/m);
+  assert.match(text, /\n      plans:\n(?: {8}.*\n)*? {8}required: true\n/);
+  assert.match(text, /\n      runner:\n(?: {8}.*\n)*? {8}default: '\["ubuntu-latest"\]'\n/);
+  assert.ok(text.includes(`runs-on: \${{ ${publicSelfHosted} && fromJSON('["ubuntu-latest"]') || fromJSON(inputs.runner) }}`));
+  const block = text.match(/\n {4}permissions:\n((?: {6}.*\n)+)/);
+  assert.deepEqual(block[1].trim().split("\n").map(line => line.trim()), ["contents: read", "checks: read", "statuses: read", "actions: read"]);
+  // Nothing from the commit runs: the lookup reads GitHub's API only.
+  assert.doesNotMatch(text, /actions\/checkout/);
+  assert.match(text, /uses: maxvyshniakov\/repo-kit\/actions\/verified-tree@v[\d.]+\n/);
+  assert.match(text, /\n {4}outputs:\n {6}urls:\n(?: {8}.*\n)*? {8}value: \$\{\{ jobs\.lookup\.outputs\.urls \}\}\n/);
+  for (const { ref } of kitReferences(text)) assert.equal(ref, `v${KIT_VERSION}`);
+  for (const [, command] of text.matchAll(/run: (.+)/g)) assert.doesNotMatch(command, /\$\{\{/, command);
+});
+
+test("the verified-tree action runs the kit's lookup with Node alone", () => {
+  const text = read(path.join(kitRoot, "actions/verified-tree/action.yml"));
+  assert.match(text, /run: node "\$GITHUB_ACTION_PATH\/\.\.\/\.\.\/src\/verified-tree\.mjs"\n/);
+  assert.ok(fs.existsSync(path.resolve(kitRoot, "actions/verified-tree", "../../src/verified-tree.mjs")));
+  assert.match(text, /REPO_KIT_PLANS: \$\{\{ inputs\.plans \}\}\n/);
+  assert.match(text, /REPO_KIT_HEAD_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \}\}\n/);
+  assert.match(text, /\noutputs:\n {2}urls:\n(?: {4}.*\n)*? {4}value: \$\{\{ steps\.lookup\.outputs\.urls \}\}\n/);
+});
+
+test("verify.yml and browser.yml skip every step for a verified tree and link the result they reuse", () => {
+  for (const file of ["verify.yml", "browser.yml"]) {
+    const text = read(path.join(workflowsDir, file));
+    assert.match(text, /\n      verified-url:\n(?: {8}.*\n)*? {8}type: string\n {8}default: ""\n/, file);
+    const steps = stepsOf(text);
+    const [guard, reuse, ...rest] = steps;
+    assert.match(guard, /^name: Refuse a self-hosted runner/, file);
+    assert.match(reuse, /^name: Reuse the passed result of this tree\n {8}if: inputs\.verified-url != ''\n/, file);
+    assert.match(reuse, /GITHUB_STEP_SUMMARY/, file);
+    assert.ok(rest.length >= 3, file);
+    for (const step of rest) assert.match(step, /\n? *if: .*inputs\.verified-url == ''/, `${file}: ${step.split("\n")[0]}`);
+  }
+});
+
+test("verify.yml and browser.yml upload JUnit reports when the caller names them", () => {
+  for (const file of ["verify.yml", "browser.yml"]) {
+    const text = read(path.join(workflowsDir, file));
+    assert.match(text, /\n      junit:\n(?: {8}.*\n)*? {8}type: string\n {8}default: ""\n/, file);
+    const upload = stepsOf(text).at(-1);
+    assert.ok(upload.startsWith(`name: Upload JUnit reports\n        if: \${{ always() && inputs.junit != '' && inputs.verified-url == '' }}\n        uses: ${UPLOAD_ARTIFACT}\n`), `${file}: ${upload}`);
+    assert.match(upload, /if-no-files-found: warn/, file);
+  }
+  assert.match(read(path.join(workflowsDir, "verify.yml")), /path: \$\{\{ inputs\.junit \}\}\n/);
+  // repo-kit checks writes its per-check timings beside the caller's reports.
+  const browser = read(path.join(workflowsDir, "browser.yml"));
+  assert.match(browser, /REPO_KIT_CHECKS_JUNIT: \$\{\{ inputs\.junit != '' && 'repo-kit-junit\/checks\.xml' \|\| '' \}\}\n/);
+  assert.match(browser, /path: \|\n {12}\$\{\{ inputs\.junit \}\}\n {12}repo-kit-junit\/\n/);
+});
+
+const template = path.join(kitRoot, "docs/templates/check.yml");
+
+test("the caller template: fast checks on main, the full suite nightly and on release tags, docs-only changes skipped", () => {
+  const script = `console.log(JSON.stringify(Bun.YAML.parse(await Bun.file(${JSON.stringify(template)}).text())));`;
+  const result = spawnSync("bun", ["-e", script], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const doc = JSON.parse(result.stdout);
+  assert.deepEqual(doc.on.push.branches, ["main"]);
+  assert.deepEqual(doc.on.push.tags, ["v*"]);
+  assert.ok(doc.on.push["paths-ignore"].includes("**/*.md"));
+  assert.ok(doc.on.pull_request["paths-ignore"].includes("**/*.md"));
+  assert.match(doc.on.schedule[0].cron, /^\d+ \d+ \* \* \*$/, "nightly");
+  assert.ok("workflow_dispatch" in doc.on);
+
+  const { tree, check, browser } = doc.jobs;
+  assert.match(tree.uses, /^maxvyshniakov\/repo-kit\/\.github\/workflows\/verified-tree\.yml@v/);
+  assert.deepEqual(tree.permissions, { contents: "read", checks: "read", statuses: "read", actions: "read" });
+  assert.equal(tree.with.force, "${{ github.event_name == 'workflow_dispatch' }}", "a manual run checks again");
+  const plans = JSON.parse(tree.with.plans);
+  // Each plan names the check run its job really produces: `<caller job> / <job name>`,
+  // browser.yml's job being named by its checks.
+  assert.ok(plans.verify.includes("check / verify"));
+  const browserName = JSON.parse(browser.with.checks).map(({ name }) => name).join(" + ");
+  assert.ok(plans.browser.includes(`browser / ${browserName}`), `${plans.browser} must name browser / ${browserName}`);
+  assert.match(read(path.join(workflowsDir, "browser.yml")), /\n    name: \$\{\{ join\(fromJSON\(inputs\.checks\)\.\*\.name, ' \+ '\) \}\}\n/);
+
+  assert.deepEqual(check.needs, "tree");
+  // A failed lookup runs the checks: the jobs start anyway and reuse nothing.
+  assert.equal(check.if, "${{ !cancelled() }}");
+  assert.equal(check.with["verified-url"], "${{ needs.tree.result == 'success' && fromJSON(needs.tree.outputs.urls).verify || '' }}");
+  assert.equal(browser.with["verified-url"], "${{ needs.tree.result == 'success' && fromJSON(needs.tree.outputs.urls).browser || '' }}");
+  // The full suite skips plain main pushes and runs on everything else.
+  assert.equal(browser.if, "${{ !cancelled() && (github.event_name != 'push' || startsWith(github.ref, 'refs/tags/')) }}");
+  // GitHub-hosted by default: the template names no runner.
+  for (const job of Object.values(doc.jobs)) assert.equal(job.with?.runner, undefined);
+  for (const { ref } of kitReferences(read(template))) assert.equal(ref, `v${KIT_VERSION}`);
 });

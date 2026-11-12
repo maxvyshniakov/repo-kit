@@ -525,16 +525,18 @@ jobs:
 
 | Workflow | Inputs |
 |---|---|
-| `verify.yml` | `args` (none; `--release` is added for `main` and pull requests into `main`), `slots` (`all`), `slot-wait` (0: wait as long as the job runs), `runner`, `timeout-minutes` (20), `fetch-depth` (1; 0 for a [changelog-entries](#changelog-entries) range step) |
-| `browser.yml` | `checks` (JSON list of `{name, run}`), `build`, `playwright` (true), `slots` (`all`: the build and every check lease them together), `slot-wait` (0), `runner`, `timeout-minutes` (45: the wait, the build and every check) |
+| `verify.yml` | `args` (none; `--release` is added for `main` and pull requests into `main`), `slots` (`all`), `slot-wait` (0: wait as long as the job runs), `runner`, `timeout-minutes` (20), `fetch-depth` (1; 0 for a [changelog-entries](#changelog-entries) range step), `verified-url`, `junit`, `junit-artifact` |
+| `browser.yml` | `checks` (JSON list of `{name, run}`), `build`, `playwright` (true), `slots` (`all`: the build and every check lease them together), `slot-wait` (0), `runner`, `timeout-minutes` (45: the wait, the build and every check), `verified-url`, `junit`, `junit-artifact` |
 | `deploy-storybook.yml` | `url`, `needs` (the caller's `toJSON(needs)`, for `repo-kit ci-gate`; default `{}`), `environment` (`storybook`), `runner`, `slots` (`all`, for the builds and `storybook:prepare-deploy`), `slot-wait` (0), `timeout-minutes` (30); `STORYBOOK_CLOUDFLARE_API_TOKEN` from that environment, with `secrets: inherit` |
 | `release.yml` | `command` (`bun run release:publish`), `enabled` (true), `slots` (`all`), `slot-wait` (0), `runner`, `timeout-minutes` (30); the caller grants `contents: write`, `packages: write` |
+| `verified-tree.yml` | `plans` (required), `branches` (`["main", "dev"]`), `depth` (100), `force` (false), `runner`; output `urls`; the caller grants `contents: read`, `checks: read`, `statuses: read`, `actions: read` to this job |
 
 `runner` is `runs-on` as JSON and defaults to `'["ubuntu-latest"]'`. A private repository may name a self-hosted
 runner, for example `'["self-hosted", "homelab"]'`. When the caller's repository is public and `runner` contains
 `self-hosted`, the job runs on `ubuntu-latest` instead and its first step fails: a pull request from a fork chooses
 the code a public repository's runner executes. Name self-hosted runners with the `self-hosted` label so the guard
-sees them.
+sees them. A `schedule` event carries no repository visibility, so the guard does not act on nightly runs; they run
+the default branch's own workflow, not a fork's.
 
 Every heavy step of these workflows runs under a slotfather lease where the runner has slotfather: `verify`, the
 browser build and checks, the Storybook builds and `storybook:prepare-deploy`, and the release command. What runs
@@ -548,6 +550,56 @@ after a failed one too, and the job fails naming the failed ones. Under a lease 
 could not run side by side with another anyway, and each built Storybook again: three concurrent builds exhausted a
 10 GiB runner. Set
 `timeout-minutes` to cover the lease wait plus the build and every check.
+
+### Skipping a verified tree
+
+A check result belongs to a tree and a plan, not to a branch or a commit. The tree (`git rev-parse <sha>^{tree}`)
+holds the workflow files, `repo-kit.config.mjs` and the lockfile, so two commits with one tree run the same checks
+the same way: promoting dev to main, merging a pull request that was up to date, or a nightly run on an unchanged
+main. `verified-tree.yml` looks for such a result before the heavy jobs start:
+
+1. It reads the tree of the workflow's commit and compares it with the newest `depth` commits of each of
+   `branches`, the commit itself and a pull request's head.
+2. On each commit with that tree it reads the check runs (the jobs of earlier workflow runs, named
+   `<caller job> / <job>`) and the commit statuses (the newest per context, such as the local release gate's
+   `Library checks (local, macOS)`).
+3. `plans` maps each plan name to the check names or status contexts that count as passing it; a trailing `*`
+   accepts a prefix. A plan reuses the first success it accepts. A plan whose checks changed never matches,
+   because a renamed or added check changes the job name (`browser.yml`'s job is named by its checks joined with
+   ` + `, so `[{"name": "stories"}]` runs as `browser / stories`).
+   A check run counts only when GitHub Actions ran it from the caller's own workflow file in the same release
+   mode: `verify.yml` adds `--release` on `main` and on pull requests into `main`, so a pull request into `dev`
+   never verifies a main push. A commit status counts by its context alone.
+4. The `urls` output maps each plan to that result's link, or `""`. `verify.yml` and `browser.yml` take it as
+   `verified-url`: when it is set the job runs no step but one, which links the reused result in the job summary,
+   and the job passes. Give those jobs `if: ${{ !cancelled() }}` and
+   `verified-url: ${{ needs.tree.result == 'success' && fromJSON(needs.tree.outputs.urls).verify || '' }}`, so a
+   failed lookup runs the checks instead of skipping them. `force: true` (the template passes it on a manual run)
+   runs every plan.
+
+The lookup checks nothing out and installs nothing: `actions/verified-tree` runs `src/verified-tree.mjs` with
+Node against GitHub's API. When GitHub cannot answer, every plan runs. `repo-kit verified-tree` is the same step
+for a job of your own (`REPO_KIT_PLANS`, `REPO_KIT_BRANCHES`, `REPO_KIT_DEPTH`, `REPO_KIT_HEAD_SHA`, `GITHUB_TOKEN`).
+
+The runner is outside the tree too: a local gate status ran `verify --release` and the browser checks on macOS.
+Leave the local gate out of a plan when you want its Linux run on every tree.
+
+### Triggers: fast checks on main, the full suite nightly and on release
+
+[docs/templates/check.yml](templates/check.yml) is a complete caller. Main pushes run `verify`; the browser suite
+runs nightly (`schedule`), on `v*` tags, on pull requests and on a manual run; changes to Markdown and `docs/` start
+no run (`paths-ignore`); every heavy job first asks `verified-tree.yml`. Under release gate `local` the checks are
+advisory, so moving the browser suite off main pushes costs at most a day of Linux coverage; releases are gated on
+the Mac. A pull request whose checks are required stays pending when `paths-ignore` starts no run: keep required
+checks off docs-only pull requests, or drop the filter there.
+
+### JUnit reports
+
+`junit` names paths or globs (one per line) of JUnit reports the job's commands write, for example a test runner's
+`--reporter=junit` output; after the job they are uploaded as the artifact `junit-artifact` (default
+`junit-<job>-<attempt>`) for 30 days, after a failed or timed-out job too. In `browser.yml`, `repo-kit checks` also writes its per-check results and
+times to `repo-kit-junit/checks.xml` (`REPO_KIT_CHECKS_JUNIT`) and that file is uploaded with them. A workflow
+calling `browser.yml` twice with `junit` gives each call its own `junit-artifact`.
 
 Jobs show as `<caller job> / <reusable job>`, for example `check / verify`, `browser / browser + stories` (named by
 its checks) and `deploy / Publish private Storybook`.

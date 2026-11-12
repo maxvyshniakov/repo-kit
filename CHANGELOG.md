@@ -4,9 +4,15 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+### Added
+
+- `verified-tree.yml` and `actions/verified-tree` (also `repo-kit verified-tree`): before the heavy jobs, look up a passed check run or commit status, accepted by a plan, on any commit with the same tree (the newest commits of main and dev, the commit itself, a pull request's head). Its `urls` output feeds the new `verified-url` input of `verify.yml` and `browser.yml`, which then skip every step and link the reused result. Opt-in: callers that do not add the job run as before.
+- `verify.yml` and `browser.yml` take `junit` (and `junit-artifact`) to upload the JUnit reports their commands write; `repo-kit checks` writes per-check results and times as JUnit to `REPO_KIT_CHECKS_JUNIT`, which `browser.yml` uploads with them.
+- `docs/templates/check.yml`: a caller running fast checks on main pushes, the full suite nightly and on release tags, skipping docs-only changes and verified trees.
+
 ### Changed
 
-- **Breaking for callers relying on the default runner:** `verify.yml`, `browser.yml`, `deploy-storybook.yml` and `release.yml` default `runner` to `'["ubuntu-latest"]'` instead of the maintainer's self-hosted labels. A private repository that wants its self-hosted runner passes `runner: '["self-hosted", "homelab"]'` (or its own labels) when it moves its workflow pins to this release. In a public repository a `runner` containing `self-hosted` runs the job on `ubuntu-latest` and fails its first step, so a fork's pull request never reaches a private runner.
+- **Breaking for callers relying on the default runner:** `verify.yml`, `browser.yml`, `deploy-storybook.yml` and `release.yml` default `runner` to `'["ubuntu-latest"]'` instead of the maintainer's self-hosted labels. A private repository that wants its self-hosted runner passes `runner: '["self-hosted", "homelab"]'` (or its own labels) when it moves its workflow pins to this release. In a public repository a `runner` containing `self-hosted` runs the job on `ubuntu-latest` and fails its first step. The guard sees the `self-hosted` label only, and not on `schedule` runs, whose event carries no repository visibility; it does not replace keeping self-hosted runners off public repositories (SECURITY.md).
 
 ## 0.5.0 - 2026-11-11
 

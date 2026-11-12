@@ -1,0 +1,90 @@
+# Reusable: has this tree already passed these checks? A check result belongs
+# to a tree and a plan, not to a branch or a commit: the tree holds the
+# workflows, the kit's configuration and the lockfile. The job compares the
+# commit's tree with the newest commits of `branches` and a pull request's
+# head, and reads the matching commits' check runs and commit statuses. Its
+# `urls` output maps each plan to the link of a passed result the plan accepts,
+# or "" when the plan has to run; verify.yml and browser.yml take that link as
+# `verified-url` and skip every step:
+#
+#   jobs:
+#     tree:
+#       uses: maxvyshniakov/repo-kit/.github/workflows/verified-tree.yml@v0.5.0
+#       permissions:
+#         contents: read
+#         checks: read
+#         statuses: read
+#         actions: read
+#       with:
+#         plans: '{"verify": ["check / verify", "Library checks (local*"]}'
+#     check:
+#       needs: tree
+#       uses: maxvyshniakov/repo-kit/.github/workflows/verify.yml@v0.5.0
+#       if: ${{ !cancelled() }}
+#       with:
+#         verified-url: ${{ needs.tree.result == 'success' && fromJSON(needs.tree.outputs.urls).verify || '' }}
+#
+# A check run counts only when GitHub Actions ran it from the caller's own
+# workflow file in the same release mode (verify.yml's --release on main and on
+# pull requests into main). Nothing from the commit runs here: no checkout,
+# only GitHub's API. When GitHub cannot answer, every plan runs. Give the
+# heavy jobs `if: ${{ !cancelled() }}` and pass "" when this job failed, so a
+# failed lookup runs the checks instead of skipping them:
+#   verified-url: ${{ needs.tree.result == 'success' && fromJSON(needs.tree.outputs.urls).verify || '' }}
+name: verified-tree
+on:
+  workflow_call:
+    inputs:
+      plans:
+        description: 'JSON object: plan name to the check names (`<caller job> / <job>`) or status contexts that count as passing it; a trailing * accepts a prefix.'
+        type: string
+        required: true
+      branches:
+        description: JSON list of branches whose newest commits are compared.
+        type: string
+        default: '["main", "dev"]'
+      depth:
+        description: Newest commits of each branch compared.
+        type: number
+        default: 100
+      force:
+        description: Run every plan without looking, for a manual run that must check again.
+        type: boolean
+        default: false
+      runner:
+        description: runs-on, as JSON. A private repository may pass a self-hosted runner; in a public one a self-hosted label fails the job on a GitHub-hosted runner.
+        type: string
+        default: '["ubuntu-latest"]'
+    outputs:
+      urls:
+        description: 'JSON object: plan name to the link of the passed result it reuses, or "".'
+        value: ${{ jobs.lookup.outputs.urls }}
+      tree:
+        description: The commit's tree hash.
+        value: ${{ jobs.lookup.outputs.tree }}
+jobs:
+  lookup:
+    name: Verified tree
+    runs-on: ${{ github.event.repository.visibility == 'public' && contains(inputs.runner, 'self-hosted') && fromJSON('["ubuntu-latest"]') || fromJSON(inputs.runner) }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      checks: read
+      statuses: read
+      actions: read
+    outputs:
+      urls: ${{ steps.tree.outputs.urls }}
+      tree: ${{ steps.tree.outputs.tree }}
+    steps:
+      - name: Refuse a self-hosted runner in a public repository
+        if: ${{ github.event.repository.visibility == 'public' && contains(inputs.runner, 'self-hosted') }}
+        run: |
+          echo "::error::A public repository must not run this workflow on a self-hosted runner: a pull request from a fork chooses the code it runs. Drop the runner input to use ubuntu-latest."
+          exit 1
+      - id: tree
+        uses: maxvyshniakov/repo-kit/actions/verified-tree@v0.5.0
+        with:
+          plans: ${{ inputs.plans }}
+          branches: ${{ inputs.branches }}
+          depth: ${{ inputs.depth }}
+          force: ${{ inputs.force }}

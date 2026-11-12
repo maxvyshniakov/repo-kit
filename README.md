@@ -229,7 +229,11 @@ The verification and browser jobs never hold more than `contents: read` and `pac
 writes. Repo-Kit's own pull-request checks use GitHub-hosted runners. In a public repository, a pull request from a
 fork runs the workflow files of that pull request, so it can choose any runner registered to the repository: do not
 register a self-hosted runner on a public repository, or require approval for every outside contributor's workflow
-runs. See [workflow inputs and browser prerequisites](docs/reference.md#workflows) and [security](SECURITY.md).
+runs. Before the heavy jobs, `verified-tree.yml` can look up a passed result for the same tree and plan (another branch,
+a pull request head, last night's run, the local release gate) and let `verify.yml` and `browser.yml` skip with a
+link to it. [docs/templates/check.yml](docs/templates/check.yml) is a complete caller: fast checks on main pushes,
+the full suite nightly and on release tags, docs-only changes skipped and optional JUnit uploads.
+See [workflow inputs and browser prerequisites](docs/reference.md#workflows) and [security](SECURITY.md).
 
 ## GITHUB_TOKEN
 

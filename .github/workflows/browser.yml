@@ -41,6 +41,18 @@ on:
         description: Seconds to wait for that lease before failing with that reason; 0 waits as long as the job runs.
         type: number
         default: 0
+      verified-url:
+        description: A link to a passed result of this tree and plan, from verified-tree.yml's urls output. When set, the job skips every step and links it.
+        type: string
+        default: ""
+      junit:
+        description: Paths or globs of JUnit reports the checks write, uploaded as an artifact after the job; empty uploads nothing.
+        type: string
+        default: ""
+      junit-artifact:
+        description: The artifact's name; set it when a workflow calls this one twice with junit.
+        type: string
+        default: ""
       timeout-minutes:
         description: Covers the wait for the lease, the build and every check.
         type: number
@@ -64,17 +76,37 @@ jobs:
         run: |
           echo "::error::A public repository must not run this workflow on a self-hosted runner: a pull request from a fork chooses the code it runs. Drop the runner input to use ubuntu-latest."
           exit 1
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.5.0
+      - name: Reuse the passed result of this tree
+        if: inputs.verified-url != ''
+        run: echo "This tree already passed these checks, so they do not run again. Result reused - $VERIFIED_URL" | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          VERIFIED_URL: ${{ inputs.verified-url }}
+      - if: inputs.verified-url == ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - if: inputs.verified-url == ''
+        uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.5.0
       # The runner must provide Chromium's system libraries; a persistent
       # self-hosted runner keeps downloaded browsers per Playwright version.
-      - if: inputs.playwright
+      - if: inputs.playwright && inputs.verified-url == ''
         run: bunx playwright install --no-shell chromium
       # The build and the checks run under one lease, so the build queues with
       # the runner's other jobs too; a check that leases again (repo-kit heavy)
       # runs inside it.
-      - run: node_modules/.bin/repo-kit heavy "$SLOTS" sh -c 'eval "$BUILD" && node_modules/.bin/repo-kit checks'
+      - if: inputs.verified-url == ''
+        run: node_modules/.bin/repo-kit heavy "$SLOTS" sh -c 'eval "$BUILD" && node_modules/.bin/repo-kit checks'
         env:
           SLOTS: ${{ inputs.slots }}
           BUILD: ${{ inputs.build }}
           REPO_KIT_CHECKS: ${{ inputs.checks }}
+          # Per-check timings as JUnit, uploaded with the caller's reports.
+          REPO_KIT_CHECKS_JUNIT: ${{ inputs.junit != '' && 'repo-kit-junit/checks.xml' || '' }}
+      - name: Upload JUnit reports
+        if: ${{ always() && inputs.junit != '' && inputs.verified-url == '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ${{ inputs.junit-artifact || format('junit-{0}-{1}', github.job, github.run_attempt) }}
+          path: |
+            ${{ inputs.junit }}
+            repo-kit-junit/
+          if-no-files-found: warn
+          retention-days: 30

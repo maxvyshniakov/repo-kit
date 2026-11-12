@@ -1,0 +1,76 @@
+# A library's .github/workflows/check.yml built from the reusable workflows.
+# Copy it and adjust the checks, the plans and the Storybook URL.
+#
+# - Main pushes run the fast checks (verify); the full suite (browser) runs
+#   nightly, on release tags, on pull requests and on a manual run.
+# - Every heavy job first asks verified-tree.yml whether its tree already passed
+#   the same plan (on dev, on a pull request head, in last night's run, or the
+#   local release gate) and then skips its steps, linking that result.
+# - Changes to Markdown and docs/ only start no run.
+# - Jobs run on GitHub-hosted ubuntu-latest. A private repository may add
+#   `runner: '["self-hosted", "<label>"]'` to each job's `with:`; a public one must not.
+# - With `junit`, each job uploads the JUnit reports its commands write.
+name: Library checks
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths-ignore: ["**/*.md", "docs/**"]
+  pull_request:
+    paths-ignore: ["**/*.md", "docs/**"]
+  schedule:
+    # Nightly full suite on main; an unchanged tree reuses last night's result.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: read
+concurrency:
+  group: checks-${{ github.ref }}
+  # A newer push to a pull request cancels its older run. Main runs are not
+  # cancelled, though GitHub replaces a pending one with a newer one.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  tree:
+    uses: maxvyshniakov/repo-kit/.github/workflows/verified-tree.yml@v0.5.0
+    permissions:
+      contents: read
+      checks: read
+      statuses: read
+      actions: read
+    with:
+      # A manual run checks again.
+      force: ${{ github.event_name == 'workflow_dispatch' }}
+      # Plan name -> the check runs (`<caller job> / <job name>`; browser.yml's
+      # job is named by its checks, joined with " + ") or commit statuses that
+      # count as the same checks on the same tree. The local release gate runs
+      # verify --release and the browser checks, so it counts for both.
+      plans: >-
+        {"verify": ["check / verify", "Library checks (local*"],
+         "browser": ["browser / stories", "Library checks (local*"]}
+  # !cancelled(): a failed lookup runs the checks instead of skipping them.
+  check:
+    needs: tree
+    if: ${{ !cancelled() }}
+    uses: maxvyshniakov/repo-kit/.github/workflows/verify.yml@v0.5.0
+    with:
+      verified-url: ${{ needs.tree.result == 'success' && fromJSON(needs.tree.outputs.urls).verify || '' }}
+  browser:
+    needs: tree
+    if: ${{ !cancelled() && (github.event_name != 'push' || startsWith(github.ref, 'refs/tags/')) }}
+    uses: maxvyshniakov/repo-kit/.github/workflows/browser.yml@v0.5.0
+    with:
+      checks: '[{"name": "stories", "run": "bun run check:stories -- --no-build"}]'
+      verified-url: ${{ needs.tree.result == 'success' && fromJSON(needs.tree.outputs.urls).browser || '' }}
+      junit: test-results/**/*.xml
+  # !cancelled() lets the deploy start when a check failed or was skipped;
+  # repo-kit ci-gate then deploys under release.gate "local" and does nothing
+  # under "ci" unless every needed job passed.
+  deploy:
+    needs: [check]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    uses: maxvyshniakov/repo-kit/.github/workflows/deploy-storybook.yml@v0.5.0
+    with:
+      url: https://catalog.example.com
+      needs: ${{ toJSON(needs) }}
+    secrets: inherit
