@@ -244,7 +244,7 @@ A repository's agent instructions can link here and carry this paragraph:
 ## Working with Lanefather
 
 Repo-Kit does not orchestrate parallel work; the maintainer's agents follow their own orchestration process.
-[Lanefather](https://github.com/maxvyshniakov/lanefather) supplies lanes, path claims, integration, independent
+[Lanefather](https://github.com/maxvyshniakov/fathers/tree/main/lanefather) supplies lanes, path claims, integration, independent
 review and protected-branch promotion for projects that configure it. repo-kit supplies verification and package
 release/publish commands. Slotfather leases the machine while those commands execute; an active lane itself holds
 no machine slots.
@@ -274,7 +274,7 @@ work. Projects sharing batch-gate evidence with a hook must provide that explici
 
 ### Lane verification adapter
 
-`repo-kit-lane` implements [Lanefather's check contract](https://github.com/maxvyshniakov/lanefather#the-check-contract)
+`repo-kit-lane` implements [Lanefather's check contract](https://github.com/maxvyshniakov/fathers/tree/main/lanefather#the-check-contract)
 from the consumer's existing `verify.steps` and optional `verify.browser`. It selects all declared checks for each
 change. Check IDs are the suite (`verify` or `browser`), a colon and the URL-encoded step name. Requested checks
 include their dependencies; when both suites run, browser work waits for normal verification. Names and commands

@@ -38,7 +38,7 @@ the [changelog](CHANGELOG.md). Use it as is, fork it, or borrow its ideas. Issue
 | Consumer | A repository that installs Repo-Kit and declares its checks in `repo-kit.config.mjs`. |
 | Step / check | One command from that configuration, with its dependencies, memory and timeout. |
 | Gate | A check whose result decides something: the pre-push gate, the release gate, the TLS gate. |
-| Slot, lease | A unit of machine capacity and a running command's reservation of it, both from [Slotfather](https://github.com/maxvyshniakov/slotfather). Without Slotfather nothing is leased. |
+| Slot, lease | A unit of machine capacity and a running command's reservation of it, both from [Slotfather](https://github.com/maxvyshniakov/fathers/tree/main/slotfather). Without Slotfather nothing is leased. |
 | Lane | Lanefather's unit of parallel work: a task with a worktree, path claims and a verification receipt. |
 | Catalog | A library's Storybook, built and deployed by the optional Storybook workflow. |
 
@@ -47,8 +47,8 @@ the [changelog](CHANGELOG.md). Use it as is, fork it, or borrow its ideas. Issue
 | Tool | Question it answers |
 | --- | --- |
 | **Repo-Kit** | Which checks run, did they pass, and is this exact package revision ready to publish? |
-| [**Lanefather**](https://github.com/maxvyshniakov/lanefather) | Who owns this task's paths, what was verified, and can its branch be integrated and finished? |
-| [**Slotfather**](https://github.com/maxvyshniakov/slotfather) | When may this expensive command use the shared machine, and how much capacity does it reserve? |
+| [**Lanefather**](https://github.com/maxvyshniakov/fathers/tree/main/lanefather) | Who owns this task's paths, what was verified, and can its branch be integrated and finished? |
+| [**Slotfather**](https://github.com/maxvyshniakov/fathers/tree/main/slotfather) | When may this expensive command use the shared machine, and how much capacity does it reserve? |
 
 Use Repo-Kit on its own for verification and releases. Add Slotfather when processes share a constrained machine;
 without it, Repo-Kit's commands run directly. Add Lanefather when coordinating parallel branches or agents.
@@ -60,7 +60,7 @@ A lane registration does not reserve machine capacity.
 - The GitHub CLI (`gh`) for GitHub-backed release commands; local verification can run without it.
 - GitHub authentication for GitHub Packages, remote release gates, publishing and notifications.
 - Playwright and browser system dependencies only for features that use them. Native Safari automation requires macOS.
-- Optional: [Slotfather](https://github.com/maxvyshniakov/slotfather) on `PATH` to lease machine capacity for heavy
+- Optional: [Slotfather](https://github.com/maxvyshniakov/fathers/tree/main/slotfather) on `PATH` to lease machine capacity for heavy
   commands, and Lanefather for parallel lanes. Neither is needed for verification, hooks or releases.
 
 Process supervision and managed hooks assume POSIX behavior; native Windows is not a supported workflow.
