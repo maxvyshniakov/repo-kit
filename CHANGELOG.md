@@ -4,6 +4,12 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+## 0.6.0 - 2026-11-12
+
+### Breaking
+
+- `verify.yml`, `browser.yml`, `deploy-storybook.yml` and `release.yml` default `runner` to `'["ubuntu-latest"]'` instead of the maintainer's self-hosted labels. A private repository that wants its self-hosted runner passes `runner: '["self-hosted", "homelab"]'` (or its own labels) when it moves its workflow pins to this release. In a public repository a `runner` containing `self-hosted` runs the job on `ubuntu-latest` and fails its first step. The guard sees the `self-hosted` label only, and not on `schedule` runs, whose event carries no repository visibility; it does not replace keeping self-hosted runners off public repositories (SECURITY.md).
+
 ### Added
 
 - `verified-tree.yml` and `actions/verified-tree` (also `repo-kit verified-tree`): before the heavy jobs, look up a passed check run or commit status, accepted by a plan, on any commit with the same tree (the newest commits of main and dev, the commit itself, a pull request's head). Its `urls` output feeds the new `verified-url` input of `verify.yml` and `browser.yml`, which then skip every step and link the reused result. Opt-in: callers that do not add the job run as before.
@@ -15,7 +21,6 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ### Changed
 
-- **Breaking for callers relying on the default runner:** `verify.yml`, `browser.yml`, `deploy-storybook.yml` and `release.yml` default `runner` to `'["ubuntu-latest"]'` instead of the maintainer's self-hosted labels. A private repository that wants its self-hosted runner passes `runner: '["self-hosted", "homelab"]'` (or its own labels) when it moves its workflow pins to this release. In a public repository a `runner` containing `self-hosted` runs the job on `ubuntu-latest` and fails its first step. The guard sees the `self-hosted` label only, and not on `schedule` runs, whose event carries no repository visibility; it does not replace keeping self-hosted runners off public repositories (SECURITY.md).
 - `repo-kit-lane` leases the slots Lanefather passes with `--jobs` (capped by the configured `slots`/`browserSlots`) instead of always the configured ones: a Sid-Kit lane check given one job held three slots and used 1.6 cores. Where a slot has memory, it still leases enough slots for its largest step; a smaller lease is also a smaller memory budget.
 - Slotfather lease labels name the project or lane and what runs (`sid-kit verify`, `lane-sk-api-surfaces check`, `sid-kit check:stories`) instead of the directory name, which in a worktree said nothing.
 
