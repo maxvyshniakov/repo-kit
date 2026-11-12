@@ -48,28 +48,36 @@ export function hostPlatform() {
 
 /** The platform a status context names at its end (`.../linux-x64` or `(..., linux-x64)`), or null. */
 export function contextPlatform(context) {
-  const match = /(?:\/|, )([a-z0-9]+-[a-z0-9_]+)\)?$/.exec(context ?? "");
-  return match ? match[1] : null;
+  const match = /(?:\/([a-z0-9]+-[a-z0-9_]+)|\(.*, ([a-z0-9]+-[a-z0-9_]+)\))$/.exec(context ?? "");
+  return match ? match[1] ?? match[2] : null;
 }
 
-const LABEL_OS = [[/^(ubuntu|linux)/i, "linux"], [/^macos/i, "darwin"], [/^windows/i, "win32"]];
-const LABEL_ARCH = [[/^(arm64|aarch64)$|-arm(64)?$/i, "arm64"], [/^(x64|amd64|x86_64)$/i, "x64"]];
+/** The OS and architecture a runner label names, either one null when it names none. */
+function labelPlatform(label) {
+  const arm = /(^|-)(arm|arm64|aarch64)$/i.test(label);
+  // GitHub's hosted images: ubuntu-* and windows-* are x64 unless -arm; macos-* is arm64 but for macos-13, -intel
+  // and -large.
+  if (/^ubuntu-/i.test(label)) return ["linux", arm ? "arm64" : "x64"];
+  if (/^windows-/i.test(label)) return ["win32", arm ? "arm64" : "x64"];
+  if (/^macos-/i.test(label)) return ["darwin", /^macos-13|-(intel|large)$/i.test(label) ? "x64" : "arm64"];
+  // A self-hosted runner's default labels.
+  const os = { linux: "linux", macos: "darwin", windows: "win32" }[label.toLowerCase()] ?? null;
+  const width = /^(arm64|aarch64)$/i.test(label) ? "arm64" : /^(x64|amd64|x86_64)$/i.test(label) ? "x64" : null;
+  return [os, width];
+}
 
 /**
  * Whether a job's runner labels allow the platform: false when a label names
- * another OS (ubuntu-*, macos-*, windows-*, or a self-hosted runner's Linux,
- * macOS, Windows) or another architecture (X64, ARM64, ubuntu-24.04-arm).
- * Labels naming neither (self-hosted, homelab) allow it.
+ * another OS or architecture (GitHub's hosted images by their name, a
+ * self-hosted runner's Linux, macOS, Windows, X64, ARM64). Labels naming
+ * neither (self-hosted, homelab) allow it.
  */
 export function labelsAllow(labels = [], platform) {
   const [os, arch] = platform.split("-");
-  for (const label of labels) {
-    const named = LABEL_OS.find(([pattern]) => pattern.test(label));
-    if (named && named[1] !== os) return false;
-    const width = LABEL_ARCH.find(([pattern]) => pattern.test(label));
-    if (width && width[1] !== arch) return false;
-  }
-  return true;
+  return labels.every(label => {
+    const [named, width] = labelPlatform(label);
+    return (!named || named === os) && (!width || width === arch);
+  });
 }
 
 /** REPO_KIT_PLANS: { name: [accepted check name or status context, ...] }; a trailing * accepts a prefix. */
@@ -118,9 +126,10 @@ export function releaseMode({ event, head_branch: branch, pull_requests: pulls =
 
 async function sameWorkflow(get, run, workflow, platform) {
   if (run.app?.slug !== "github-actions") return false;
-  if (!workflow) return true;
   const job = await get(`/actions/jobs/${run.id}`, { missing: {} });
-  if (!job.run_id || !labelsAllow(job.labels, platform)) return false;
+  if (!labelsAllow(job.labels, platform)) return false;
+  if (!workflow) return true;
+  if (!job.run_id) return false;
   const workflowRun = await get(`/actions/runs/${job.run_id}`, { missing: {} });
   return workflowRun.path === workflow.path && releaseMode(workflowRun) === workflow.release;
 }

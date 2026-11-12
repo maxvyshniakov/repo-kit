@@ -56,7 +56,9 @@ on:
         type: boolean
         default: false
       platform:
-        description: 'The platform the checks run on, <os>-<arch> in Node''s names (linux-x64, darwin-arm64); only results from it count. Default: this lookup runner''s.'
+        description: >-
+          The platform the checks run on, <os>-<arch> in Node's names (linux-x64, darwin-arm64);
+          only results from it count. Default: this lookup runner's; pass it when the checks run elsewhere.
         type: string
         default: ""
       runner:

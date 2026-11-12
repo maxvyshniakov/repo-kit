@@ -223,6 +223,9 @@ test("a status context names its platform at its end, after a slash or in the ga
   assert.equal(contextPlatform("Library checks (local, macOS)"), null);
   assert.equal(contextPlatform("check / verify"), null);
   assert.equal(contextPlatform("deploy"), null);
+  assert.equal(contextPlatform("Library checks (local, linux-x64"), null);
+  assert.equal(contextPlatform("verified-tree/linux-x64)"), null);
+  assert.equal(contextPlatform("lint, linux-x64"), null);
 });
 
 test("a check run counts only when its job's runner labels do not name another platform", async () => {
@@ -232,6 +235,13 @@ test("a check run counts only when its job's runner labels do not name another p
     [["self-hosted", "homelab"], "linux-x64", true],          // the same workflow file at the same tree: its runner
     [["ubuntu-latest"], "linux-x64", true],
     [["ubuntu-latest"], "darwin-arm64", false],
+    [["ubuntu-latest"], "linux-arm64", false],                // GitHub's hosted images imply their architecture
+    [["macos-15"], "darwin-arm64", true],
+    [["macos-13"], "darwin-arm64", false],
+    [["macos-15-intel"], "darwin-x64", true],
+    [["macos-15-large"], "darwin-arm64", false],
+    [["windows-latest"], "win32-arm64", false],
+    [["windows-11-arm"], "win32-arm64", true],
     [["ubuntu-24.04-arm"], "linux-x64", false],
     [["ubuntu-24.04-arm"], "linux-arm64", true],
     [["macos-15"], "linux-x64", false],
@@ -248,6 +258,9 @@ test("a check run counts only when its job's runner labels do not name another p
   });
   const result = await findVerified({ repository: REPO, sha: sha("a"), plans, branches: ["main"], token: "token", fetcher, workflow, platform });
   assert.equal(result.plans.verify, null);
+  // Without the caller's workflow (no GITHUB_WORKFLOW_REF) the labels still decide.
+  const unknown = await findVerified({ repository: REPO, sha: sha("a"), plans, branches: ["main"], token: "token", fetcher, platform });
+  assert.equal(unknown.plans.verify, null);
 });
 
 test("the host platform is Node's <os>-<arch>", () => {

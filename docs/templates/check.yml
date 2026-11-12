@@ -41,6 +41,9 @@ jobs:
     with:
       # A manual run checks again.
       force: ${{ github.event_name == 'workflow_dispatch' }}
+      # Only results from the platform the heavy jobs run on count; it defaults
+      # to this lookup's runner. Pass `platform` (such as linux-arm64) when
+      # the heavy jobs run on another runner than this job.
       # Plan name -> the check runs (`<caller job> / <job name>`; browser.yml's
       # job is named by its checks, joined with " + ") or commit statuses that
       # count as the same checks on the same tree. The local release gate runs

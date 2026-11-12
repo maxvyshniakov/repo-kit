@@ -669,10 +669,12 @@ main. `verified-tree.yml` looks for such a result before the heavy jobs start:
    never verifies a main push.
    The platform is part of the plan: a tree counts as verified only for the OS and architecture it was checked on
    (`platform`, `<os>-<arch>` in Node's names, by default the lookup runner's). A commit status counts only when its
-   context ends with that platform, after a slash (`verified-tree/linux-x64`) or in the local gate's parentheses
-   (`Library checks (local, linux-x64)`); a context naming no platform, such as the `(local, macOS)` of repo-kit
+   context ends with that platform, in the local gate's parentheses (`Library checks (local, linux-x64)`) or after
+   a slash (`verified-tree/linux-x64`, for a status another tool posts); a context naming no platform, such as the `(local, macOS)` of repo-kit
    0.6.0 and older, counts for none. A check run counts unless its job's runner labels name another OS or
-   architecture (`ubuntu-*`, `macos-*`, `windows-*`, `Linux`, `macOS`, `X64`, `ARM64`, `*-arm`). A green local gate
+   architecture: GitHub's hosted images by name (`ubuntu-*` and `windows-*` are x64 unless `-arm`, `macos-*` arm64
+   but for `macos-13`, `-intel` and `-large`) and a self-hosted runner's `Linux`, `macOS`, `Windows`, `X64`, `ARM64`.
+   Pass `platform` when the heavy jobs run on another runner than the lookup. A green local gate
    on the Mac therefore never skips the Linux run, and a second run of the tree on the same platform is skipped.
 4. The `urls` output maps each plan to that result's link, or `""`. `verify.yml` and `browser.yml` take it as
    `verified-url`: when it is set the job runs no step but one, which links the reused result in the job summary,
