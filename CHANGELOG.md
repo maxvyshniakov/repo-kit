@@ -4,6 +4,8 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+## 0.6.1 - 2026-11-13
+
 ### Added
 
 - The changelog check fails an Unreleased `### Breaking` entry that lacks an indented line `No transition period: <why>`, saying why a transition period could not avoid the break. Only Unreleased is checked; released sections stay as they are. A consumer with such an entry adds the line when it upgrades.
