@@ -149,7 +149,7 @@ export async function runPublish(config, { resume = false } = {}) {
   const tag = `v${pkg.version}`;
   const gate = releaseGate(config);
   // Before the token reaches any request.
-  if (!runTlsGate()) return fail([`Not publishing ${pkg.name}@${pkg.version}: the TLS gate failed (README.md#tls-gate).`]);
+  if (!runTlsGate({ requireRegistry: true })) return fail([`Not publishing ${pkg.name}@${pkg.version}: the TLS gate failed (README.md#tls-gate).`]);
   const { token, source } = resolveToken();
   if (token && source !== "GITHUB_TOKEN") console.log(`GITHUB_TOKEN unset; publishing with ${source}.`);
   git("fetch", "--quiet", "--tags", "origin", "main");

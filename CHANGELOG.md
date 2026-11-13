@@ -15,6 +15,8 @@ Versions and release rules: [README.md](README.md#versioning).
 - `repo-kit shoot --browser=firefox` on a Playwright older than 1.57.0 (the first that launches the `moz-firefox` channel) fails at once, naming the version it needs and the one installed. The optional Playwright peer stays `>=1.50.0`; the other browsers need nothing new.
 - `repo-kit shoot`: a story the Vite overlay never leaves, or one on Storybook's error display, gets no picture and the run fails naming it after the others; such a story used to be pictured with exit 0.
 
+- The TLS gate (repo-kit#17) is offline and deterministic, about 2 ms instead of 6 s or more: Bun 1.4.4 or later, none of the eMudhra incident roots (by SHA-256 fingerprint) in `tls.rootCertificates`, and no environment variable that adds certificate authorities (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_USE_SYSTEM_CA`, `--use-system-ca`/`--use-openssl-ca` in `NODE_OPTIONS` or `BUN_OPTIONS`, `npm_config_cafile`/`npm_config_ca`). `REPO_KIT_TLS_ALLOW_CA_ENV=1` allows such variables when the bundles they name hold no incident root. The live probe of the incident hosts runs its 26 requests side by side and fails only when an incident host answers; timeouts and DNS errors warn instead of failing. `publish` still requires `registry.npmjs.org` to answer. The live probe stops asking the incident hosts on 2027-02-01. `repo-kit tls --offline` runs the gate alone.
+
 ### Deprecated
 
 - The local release gate's status context `Library checks (local, macOS)` (and `(local, Linux)`, `(local, Windows)`): the gate writes it beside `Library checks (local, <os>-<arch>)` until the next batched minor release removes it. Move branch protection rules to the new context.

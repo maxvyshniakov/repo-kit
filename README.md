@@ -245,9 +245,12 @@ package access settings. [Authentication reference](docs/reference.md#github_tok
 
 ## TLS gate
 
-Setup and publishing perform live TLS checks before installation or credential use. They need network access to
-the registry and certificate-test hosts; DNS failures/timeouts fail the gate. Offline or restricted-network use
-therefore needs planning. [Exact probes and boundaries](docs/reference.md#tls-gate)
+Setup and publishing check the Bun runtime before installation or credential use. The gate is offline and takes
+milliseconds: Bun 1.4.4 or later, none of the eMudhra incident roots in its root store, and no environment variable
+adding certificate authorities (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, ...) unless `REPO_KIT_TLS_ALLOW_CA_ENV=1`
+allows them, which then requires their bundles to hold no incident root. A live probe of the incident hosts runs
+beside it until 2027-02-01: it fails only when such a host answers, and timeouts or DNS errors only warn. Publishing
+also needs `registry.npmjs.org` to answer. [Exact checks and boundaries](docs/reference.md#tls-gate)
 
 ## Versioning
 

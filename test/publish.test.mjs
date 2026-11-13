@@ -123,7 +123,7 @@ test("GIT_COMMITTER_EMAIL sets an annotated tag's tagger without touching git co
 
 test("publish runs the TLS gate before the token reaches any request, and notifies only after tagging", () => {
   const source = readFileSync(new URL("../src/publish.mjs", import.meta.url), "utf8");
-  const gate = source.indexOf("runTlsGate()");
+  const gate = source.indexOf("runTlsGate({ requireRegistry: true })");
   assert.ok(gate > 0 && gate < source.indexOf("resolveToken()"), "the gate runs before the token is read");
   const pushTag = source.slice(source.indexOf("const pushTag = async () => {"), source.indexOf("  if (action === \"done\") {"));
   const tagPush = pushTag.indexOf('git("push", "origin", tag);');
@@ -194,7 +194,7 @@ test("publish follows release.gate: the local attestation before bun publish, or
   assert.match(branch, /readAttestation\(/);
   assert.match(branch, /if \(attestation\.state !== "passed"\) return fail\(/);
   // The gate is read before the TLS gate, so a mistyped release.gate fails first.
-  assert.ok(source.indexOf("releaseGate(config)") < source.indexOf("runTlsGate()"));
+  assert.ok(source.indexOf("releaseGate(config)") < source.indexOf("runTlsGate({ requireRegistry: true })"));
 });
 
 test("publish refuses a Python package before the TLS gate or any token", async () => {

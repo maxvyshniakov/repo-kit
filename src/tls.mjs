@@ -6,9 +6,10 @@ import { fileURLToPath } from "node:url";
 
 export const TLS_GATE = fileURLToPath(new URL("./tls-gate.mjs", import.meta.url));
 
-export function runTlsGate({ env = process.env } = {}) {
-  console.log("TLS gate: the Bun runtime must trust registry.npmjs.org and reject the compromised eMudhra chains");
-  const result = spawnSync("bun", [TLS_GATE], { stdio: "inherit", env });
+/** `requireRegistry` (publish): registry.npmjs.org must answer; elsewhere its failure only warns. */
+export function runTlsGate({ env = process.env, requireRegistry = false, args = [] } = {}) {
+  console.log("TLS gate: the Bun runtime must not trust the compromised eMudhra chains (README.md#tls-gate)");
+  const result = spawnSync("bun", [TLS_GATE, ...(requireRegistry ? ["--require-registry"] : []), ...args], { stdio: "inherit", env });
   if (result.error) console.error(`TLS gate: ${result.error.message}`);
   return result.status === 0;
 }

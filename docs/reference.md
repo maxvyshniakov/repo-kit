@@ -570,18 +570,37 @@ repositories needs it, when the lockfile contains those packages:
 
 ## TLS gate
 
-Bun 1.3.14 trusted the compromised eMudhra chains; Bun 1.4.4 rejects all 12 fixtures.
+Bun 1.3.14 trusted the compromised eMudhra chains ([incident write-up](https://emudhra.we-have-a-problem.com/));
+Bun 1.4.4 rejects all 12 fixtures, because its root store no longer holds the roots they chain to.
 
-`src/tls-gate.mjs` is a dependency-free live check on the actual Bun runtime's `fetch` and `https` clients:
+`src/tls-gate.mjs` runs on the actual Bun runtime and needs nothing installed. The gate is offline and deterministic
+(about 2 ms):
 
-- `registry.npmjs.org` must succeed;
-- every `*.we-have-a-problem.com` incident host must fail with a trust-chain rejection;
-- DNS errors and timeouts fail closed.
+- the runtime is Bun 1.4.4 or later;
+- `tls.rootCertificates` holds none of the incident roots, by SHA-256 fingerprint: emSign ECC Root CA - G3,
+  emSign Root TLS CA - G3, emSign Root CS CA - G3, and AAA Certificate Services (the Sectigo cross-signs chain to it);
+- no environment variable adds certificate authorities: `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR`,
+  `NODE_USE_SYSTEM_CA`, `--use-system-ca` or `--use-openssl-ca` in `NODE_OPTIONS` or `BUN_OPTIONS`,
+  `npm_config_cafile` and `npm_config_ca`. `REPO_KIT_TLS_ALLOW_CA_ENV=1` allows them; the gate then reads each
+  bundle they name and fails if one holds an incident root or cannot be read. The operating system's store
+  (`NODE_USE_SYSTEM_CA`, `--use-system-ca`) cannot be read offline: allowed, it only warns.
+
+The live probe is secondary. It asks `registry.npmjs.org` and the 12 `*.we-have-a-problem.com` incident hosts with
+both the `fetch` and `https` clients, all side by side (10 s timeout each; about 0.5 s when they answer). It fails
+only on positive evidence of trust, an incident host that answers. A trust-chain rejection passes; a timeout, DNS error
+or any other failure prints a warning and does not block, because it proves nothing either way. `registry.npmjs.org`
+must answer for `publish` (`--require-registry`); elsewhere its failure warns.
+
+**Sunset:** from 2027-02-01 (`LIVE_PROBE_SUNSET`) the live probe no longer asks the incident hosts, and it is to be
+removed. The offline gate stays.
+
+`bun src/tls-gate.mjs --offline` (or `repo-kit tls --offline`) runs the gate alone.
 
 Where it runs:
 
 - the composite action runs it before `bun install`;
-- `publish` runs it before the token reaches any request;
+- `release-gate` runs it before installing;
+- `publish` runs it, with `--require-registry`, before the token reaches any request;
 - the pre-push hook refuses a local Bun older than 1.4.4.
 
 Each environment has its own trust boundary. Node, Git, downloaded actions and containers need their own

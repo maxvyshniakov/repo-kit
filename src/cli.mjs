@@ -63,7 +63,7 @@ export async function main([command, ...args]) {
   }
   if (command === "tls") {
     const { runTlsGate } = await import("./tls.mjs");
-    return runTlsGate() ? 0 : 1;
+    return runTlsGate({ args: args.filter(arg => arg === "--offline" || arg === "--require-registry") }) ? 0 : 1;
   }
   if (!command || command === "help" || command === "--help") return usage(0);
 
