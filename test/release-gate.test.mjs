@@ -10,6 +10,7 @@ import {
   attestationState,
   ciGateDecision,
   localContext,
+  localContexts,
   publishGatePlan,
   releaseGate,
   runReleaseGate,
@@ -50,6 +51,10 @@ test("gate ci keeps publish's old decisions exactly; gate local asks for the att
 
 test("the attestation is a commit status named by the platform that ran the gate, OS and architecture", () => {
   assert.equal(localContext("darwin", "arm64"), "Library checks (local, darwin-arm64)");
+  // The deprecated 0.6.0 name, written beside it until the next batched minor, so a protection rule requiring it holds.
+  assert.deepEqual(localContexts("darwin", "arm64"), ["Library checks (local, darwin-arm64)", "Library checks (local, macOS)"]);
+  assert.deepEqual(localContexts("linux", "x64"), ["Library checks (local, linux-x64)", "Library checks (local, Linux)"]);
+  assert.deepEqual(localContexts("freebsd", "x64"), ["Library checks (local, freebsd-x64)"]);
   assert.equal(localContext("linux", "x64"), "Library checks (local, linux-x64)");
   assert.equal(localContext(), `Library checks (local, ${process.platform}-${process.arch})`);
 });
@@ -192,10 +197,11 @@ test("the gate verifies the exact commit in a clean worktree and records a passe
     assert.equal(result, 0, output);
     assert.deepEqual(fixture.ran(), ["install install --frozen-lockfile gate-token", "run verify -- --release"]);
     const posts = fixture.requests.filter(request => request.method === "POST");
-    assert.equal(posts.length, 1);
+    assert.equal(posts.length, 2);
     assert.equal(posts[0].url, `https://api.github.com/repos/maxvyshniakov/example/statuses/${fixture.sha}`);
     assert.equal(posts[0].body.state, "success");
     assert.equal(posts[0].body.context, "Library checks (local, darwin-arm64)");
+    assert.deepEqual(posts[1].body, { ...posts[0].body, context: "Library checks (local, macOS)" });
     assert.match(posts[0].body.description, new RegExp(`^Passed on test-mac \\(macOS\\).*log \\.git/repo-kit-gate/${fixture.sha.slice(0, 12)}\\.log`));
     // The log holds what ran.
     const log = fs.readFileSync(path.join(fixture.root, ".git/repo-kit-gate", `${fixture.sha.slice(0, 12)}.log`), "utf8");

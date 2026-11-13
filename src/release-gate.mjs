@@ -56,6 +56,17 @@ export function localContext(platform = process.platform, arch = process.arch) {
 }
 
 /**
+ * The contexts the gate records: the platform one, then the deprecated
+ * `Library checks (local, macOS)` (Linux, Windows) of repo-kit 0.6.0 and older,
+ * so a branch protection rule that requires the old name keeps passing. The old
+ * name goes in the next batched minor release.
+ */
+export function localContexts(platform = process.platform, arch = process.arch) {
+  const legacy = PLATFORM_NAMES[platform];
+  return [localContext(platform, arch), ...(legacy ? [`${CONTEXT_PREFIX}, ${legacy})`] : [])];
+}
+
+/**
  * What publish requires before it publishes: "attestation" (a passed local
  * gate status), "workflow" (the checks workflow passed), "actions" (inside
  * Actions the calling workflow orders publication after its own check jobs) or
@@ -257,7 +268,7 @@ export async function runReleaseGate(config, args = [], deps = {}) {
   const logFile = path.join(recordDir, `${short}.log`);
   const logLabel = path.relative(path.dirname(gitDir), logFile);
   const gate = releaseGate(config);
-  const context = localContext(platform, arch);
+  const [context, ...legacyContexts] = localContexts(platform, arch);
   const { token, source } = tokenSource ? { token: tokenSource() } : resolveToken(env);
   const repository = () => githubRepository(git("remote", "get-url", "origin"));
   const fail = lines => {
@@ -271,7 +282,10 @@ export async function runReleaseGate(config, args = [], deps = {}) {
   const attest = async ({ passed, seconds, browser }) => {
     if (!options.attest) return passed ? 0 : 1;
     const description = statusDescription({ passed, host, platform, kitVersion: KIT_VERSION, seconds, log: logLabel, browser });
-    const posted = await postStatus(repository(), sha, { state: passed ? "success" : "failure", context, description }, token, fetcher);
+    let posted = await postStatus(repository(), sha, { state: passed ? "success" : "failure", context, description }, token, fetcher);
+    for (const legacy of legacyContexts) {
+      if (posted.ok) posted = await postStatus(repository(), sha, { state: passed ? "success" : "failure", context: legacy, description }, token, fetcher);
+    }
     if (posted.ok) {
       print(`release-gate: recorded "${context}" = ${passed ? "success" : "failure"} on ${short}: ${description}`);
       return passed ? 0 : 1;

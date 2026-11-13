@@ -211,8 +211,14 @@ test("a tree is verified only for the platform it was checked on: a Mac result n
     ["Library checks (local, linux-x64)", "linux-x64", true],
     ["verified-tree/linux-x64", "linux-x64", true],
     ["verified-tree/linux-x64", "darwin-arm64", false],
-    ["Library checks (local, macOS)", "darwin-arm64", false],        // repo-kit 0.6.0 and older named no architecture
-    ["Library checks (local, Linux)", "linux-x64", false],
+    // The deprecated context of repo-kit 0.6.0 and older (the gate still writes it beside the new one until the
+    // next batched minor) names the OS only: it counts for that OS on any architecture.
+    ["Library checks (local, macOS)", "darwin-arm64", true],
+    ["Library checks (local, macOS)", "darwin-x64", true],
+    ["Library checks (local, macOS)", "linux-x64", false],
+    ["Library checks (local, Linux)", "linux-x64", true],
+    ["Library checks (local, Linux)", "darwin-arm64", false],
+    ["Library checks (local, Plan9)", "linux-x64", false],
   ];
   for (const [context, asking, reused] of rows) assert.equal(Boolean(await lookup(context, asking)), reused, `${context} asked from ${asking}`);
 });
@@ -220,7 +226,10 @@ test("a tree is verified only for the platform it was checked on: a Mac result n
 test("a status context names its platform at its end, after a slash or in the gate's parentheses", () => {
   assert.equal(contextPlatform("Library checks (local, darwin-arm64)"), "darwin-arm64");
   assert.equal(contextPlatform("verified-tree/linux-x64"), "linux-x64");
-  assert.equal(contextPlatform("Library checks (local, macOS)"), null);
+  assert.equal(contextPlatform("Library checks (local, macOS)"), "darwin-*");
+  assert.equal(contextPlatform("Library checks (local, Linux)"), "linux-*");
+  assert.equal(contextPlatform("Library checks (local, Windows)"), "win32-*");
+  assert.equal(contextPlatform("verified-tree (macOS)"), null);
   assert.equal(contextPlatform("check / verify"), null);
   assert.equal(contextPlatform("deploy"), null);
   assert.equal(contextPlatform("Library checks (local, linux-x64"), null);

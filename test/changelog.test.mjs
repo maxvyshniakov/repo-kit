@@ -112,6 +112,21 @@ test("a manifest, lockfile or quick-start version that disagrees with the change
   assert.match(changelogIssues({ ...pkg, name: "@maxvyshniakov/other" }).join("\n"), /title must be "# @maxvyshniakov\/other Changelog"/);
 });
 
+test("an Unreleased Breaking entry must say why no transition period was possible", () => {
+  const pkg = { name: "@maxvyshniakov/example", version: "0.2.0" };
+  const withBreaking = entries => changelog.replace("## Unreleased\n", `## Unreleased\n\n### Breaking\n\n${entries}\n`);
+  const bare = changelogIssues({ ...pkg, changelog: withBreaking("- Removed the `size` prop.") });
+  assert.match(bare.join("\n"), /line 9: a Breaking entry needs a line "No transition period: <why>"/);
+  assert.deepEqual(changelogIssues({ ...pkg, changelog: withBreaking("- Removed the `size` prop.\n  No transition period: the prop crashes every caller that sets it.") }), []);
+  // Each entry needs its own reason; an empty one does not count.
+  const second = changelogIssues({ ...pkg, changelog: withBreaking("- One.\n  No transition period: a reason.\n- Two.\n  No transition period:") });
+  assert.equal(second.length, 1);
+  assert.match(second[0], /line 11: .*"- Two\."/);
+  // Released sections keep their history; only Unreleased is checked.
+  assert.deepEqual(changelogIssues({ ...pkg, changelog }), []);
+  assert.match(changelog, /## 0\.2\.0[^]*### Breaking/);
+});
+
 test("the release gate requires an empty Unreleased section", () => {
   const pkg = { name: "@maxvyshniakov/example", version: "0.2.0", changelog };
   assert.match(changelogIssues(pkg, { release: true }).join("\n"), /"## Unreleased" has entries/);

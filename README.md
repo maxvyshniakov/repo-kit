@@ -251,9 +251,13 @@ therefore needs planning. [Exact probes and boundaries](docs/reference.md#tls-ga
 
 ## Versioning
 
-Pin package and workflow versions together. Cut a release, publish the exact verified revision, then update
-consumer pins and managed hooks. Registry publication and downstream adoption have their own checks and permissions.
-[Maintainer release procedure](docs/reference.md#versioning)
+Pin package and workflow versions together. Changes are compatible first: a new form comes in beside the old one,
+which is deprecated and removed later together with other deprecated forms in one minor release. A change is Breaking
+only when no transition period could avoid it, and its changelog entry says why (`No transition period: …`);
+`check-changelogs` fails a Breaking entry without that line. Releases follow consumer need, not every change.
+Cut a release, publish the exact verified revision, then update consumer pins and managed hooks. Registry publication
+and downstream adoption have their own checks and permissions.
+[Versioning rules and maintainer release procedure](docs/reference.md#versioning)
 
 ## Developing
 

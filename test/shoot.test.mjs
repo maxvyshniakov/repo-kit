@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { withDefaults } from "../src/config.mjs";
-import { browserNames, launchBrowser, loadPlaywright, parseBrowserNames, parseShootArgs, readIndex, shootStories, shotFile, storyUrl } from "../src/shoot.mjs";
+import { browserNames, FIREFOX_PLAYWRIGHT, launchBrowser, loadPlaywright, playwrightVersion, parseBrowserNames, parseShootArgs, readIndex, shootStories, shotFile, storyUrl } from "../src/shoot.mjs";
 import { EventEmitter } from "node:events";
 import { closeSafari, launchSafari, pairingRecovery, splitDrivers } from "../src/safari.mjs";
 import { decodeViewportImages } from "../src/shoot.mjs";
@@ -88,6 +88,26 @@ test("each name launches one engine: Playwright's Chromium and WebKit, the insta
   await assert.rejects(launchBrowser("edge", deps), /Unknown browser edge/);
 });
 
+test("only Firefox needs Playwright 1.57.0 (the moz-firefox channel); an older one fails naming both versions", async () => {
+  assert.equal(FIREFOX_PLAYWRIGHT, "1.57.0");
+  const { launches, playwright } = fakePlaywright();
+  const old = { playwright, playwrightVersion: () => "1.56.1" };
+  await assert.rejects(launchBrowser("firefox", old), /shoot --browser=firefox needs Playwright 1\.57\.0 or later \(the moz-firefox channel\); this repository has 1\.56\.1/);
+  assert.equal(await launchBrowser("chromium", old), "chromium browser");
+  assert.equal(await launchBrowser("webkit", { playwright, playwrightVersion: "1.50.0" }), "webkit browser");
+  assert.equal(await launchBrowser("firefox", { playwright, playwrightVersion: () => "1.57.0" }), "firefox browser");
+  assert.equal(await launchBrowser("firefox", { playwright, playwrightVersion: () => "1.60.0-alpha-2026-11-01" }), "firefox browser");
+  // A version shoot cannot read does not stop the launch.
+  assert.equal(await launchBrowser("firefox", { playwright, playwrightVersion: () => undefined }), "firefox browser");
+  assert.deepEqual(launches.map(([name]) => name), ["chromium", "webkit", "firefox", "firefox", "firefox"]);
+});
+
+test("the package.json declares Playwright as an optional peer with the 0.6.0 floor", () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(manifest.peerDependencies.playwright, ">=1.50.0");
+  assert.equal(manifest.peerDependenciesMeta.playwright.optional, true);
+});
+
 test("Safari needs no Playwright", async () => {
   const deps = { playwright: () => { throw new Error("loaded Playwright"); }, launchSafari: () => "safari browser" };
   assert.equal(await launchBrowser("safari", deps), "safari browser");
@@ -103,6 +123,14 @@ test("Playwright comes from the repository, with a message when it has none", as
     fs.writeFileSync(path.join(module, "package.json"), '{"name": "playwright", "main": "index.js"}\n');
     fs.writeFileSync(path.join(module, "index.js"), "exports.chromium = { from: 'the repository' };\n");
     assert.deepEqual(loadPlaywright(empty).chromium, { from: "the repository" });
+    fs.writeFileSync(path.join(module, "package.json"), '{"name": "playwright", "version": "1.56.1", "main": "index.js"}\n');
+    assert.equal(playwrightVersion(empty), "1.56.1");
+    const none = fs.mkdtempSync(path.join(os.tmpdir(), "repo-kit-shoot-"));
+    try {
+      assert.equal(playwrightVersion(none), undefined);
+    } finally {
+      fs.rmSync(none, { recursive: true, force: true });
+    }
   } finally {
     fs.rmSync(empty, { recursive: true, force: true });
   }

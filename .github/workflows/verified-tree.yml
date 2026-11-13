@@ -29,7 +29,8 @@
 # pull requests into main). A tree counts as verified only for the platform it
 # was checked on: a commit status counts only when its context names the
 # `platform` (`Library checks (local, linux-x64)`, `verified-tree/linux-x64`),
-# so a green local gate on the Mac never skips the Linux run. `platform`
+# so a green local gate on the Mac never skips the Linux run (the deprecated
+# `Library checks (local, macOS)` counts for darwin-* on any architecture). `platform`
 # defaults to this lookup's runner; pass it when the checks run elsewhere. Nothing from the commit runs here: no checkout,
 # only GitHub's API. When GitHub cannot answer, every plan runs. Give the
 # heavy jobs `if: ${{ !cancelled() }}` and pass "" when this job failed, so a

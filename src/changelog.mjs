@@ -12,6 +12,15 @@
 //   ### Breaking | Added | Changed | Deprecated | Removed | Fixed | Security
 //
 //   - Entry ...
+//
+// A Breaking entry under "## Unreleased" also carries an indented line saying
+// why a transition period (the new form beside the deprecated old one) could
+// not avoid the break:
+//
+//   - Removed the `size` prop.
+//     No transition period: <why>
+
+export const NO_TRANSITION = "No transition period:";
 
 export const SECTION_NAMES = ["Breaking", "Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"];
 
@@ -98,6 +107,7 @@ export function parseChangelog(text) {
       if (position !== 0) errors.push(`line ${section.line}: "## Unreleased" must be the first section`);
       if (unreleased !== null) errors.push(`line ${section.line}: duplicate "## Unreleased"`);
       unreleased = trimBlank(section.body).join("\n");
+      errors.push(...breakingWithoutReason(section));
       continue;
     }
     const release = RELEASE_HEADING.exec(section.heading);
@@ -118,6 +128,34 @@ export function parseChangelog(text) {
   }
 
   return { title, intro: trimBlank(intro).join("\n"), unreleased: unreleased ?? "", releases, errors };
+}
+
+// Each "- " entry under the section's "### Breaking" needs a non-empty "No transition period:" line of its own.
+function breakingWithoutReason(section) {
+  const errors = [];
+  let breaking = false;
+  let entry = null;
+  const close = () => {
+    if (entry && !entry.reason) errors.push(`line ${entry.line}: a Breaking entry needs a line "${NO_TRANSITION} <why>" saying why the old form could not stay deprecated for a while: "${entry.text.slice(0, 60)}"`);
+    entry = null;
+  };
+  for (const [offset, line] of section.body.entries()) {
+    const heading = /^### (.+)$/.exec(line);
+    if (heading) {
+      close();
+      breaking = heading[1] === "Breaking";
+      continue;
+    }
+    if (!breaking) continue;
+    if (line.startsWith("- ")) {
+      close();
+      entry = { line: section.line + 1 + offset, text: line, reason: false };
+    } else if (entry && line.trim().startsWith(NO_TRANSITION) && line.trim().slice(NO_TRANSITION.length).trim()) {
+      entry.reason = true;
+    }
+  }
+  close();
+  return errors;
 }
 
 export function formatChangelog({ title, intro, unreleased, releases }) {

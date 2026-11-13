@@ -25,8 +25,11 @@
 // (darwin-arm64, linux-x64): REPO_KIT_PLATFORM, or the lookup runner's own. A
 // commit status counts only when its context ends with that platform, after a
 // slash (`verified-tree/linux-x64`) or in the local gate's parentheses
-// (`Library checks (local, linux-x64)`); a context naming none (the gate of
-// repo-kit 0.6.0 and older wrote `(local, macOS)`) counts for no platform. A
+// (`Library checks (local, linux-x64)`). The deprecated gate context of
+// repo-kit 0.6.0 and older, `Library checks (local, macOS)` (Linux, Windows),
+// names the OS only and counts for it on any architecture (`darwin-*`); the gate
+// writes it beside the new one until the next batched minor. A context naming
+// none counts for no platform. A
 // check run of the caller's own workflow at the same tree ran on the runner
 // that workflow names; it counts unless its job's runner labels name another
 // OS or architecture.
@@ -46,10 +49,26 @@ export function hostPlatform() {
   return `${process.platform}-${process.arch}`;
 }
 
-/** The platform a status context names at its end (`.../linux-x64` or `(..., linux-x64)`), or null. */
+// The OS names of the deprecated local gate context, `Library checks (local, macOS)`.
+const LEGACY_GATE = /^Library checks \(local, (macOS|Linux|Windows)\)$/;
+const LEGACY_OS = { macOS: "darwin", Linux: "linux", Windows: "win32" };
+
+/**
+ * The platform a status context names at its end (`.../linux-x64` or `(..., linux-x64)`), `<os>-*` for the
+ * deprecated `Library checks (local, macOS)`, or null.
+ */
 export function contextPlatform(context) {
+  const legacy = LEGACY_GATE.exec(context ?? "");
+  if (legacy) return `${LEGACY_OS[legacy[1]]}-*`;
   const match = /(?:\/([a-z0-9]+-[a-z0-9_]+)|\(.*, ([a-z0-9]+-[a-z0-9_]+)\))$/.exec(context ?? "");
   return match ? match[1] ?? match[2] : null;
+}
+
+/** Whether a status context counts for the platform: it names that platform, or its OS with `-*`. */
+export function contextCounts(context, platform) {
+  const named = contextPlatform(context);
+  if (!named) return false;
+  return named.endsWith("-*") ? platform.startsWith(named.slice(0, -1)) : named === platform;
 }
 
 /** The OS and architecture a runner label names, either one null when it names none. */
@@ -146,7 +165,7 @@ async function passedResults(get, repository, sha, accepted, workflow, platform)
     // The API lists a commit's statuses newest first: the first per context is current.
     if (seen.has(status.context)) continue;
     seen.add(status.context);
-    if (status.state === "success" && contextPlatform(status.context) === platform) passed.push({ name: status.context, url: status.target_url || `https://github.com/${repository}/commit/${sha}` });
+    if (status.state === "success" && contextCounts(status.context, platform)) passed.push({ name: status.context, url: status.target_url || `https://github.com/${repository}/commit/${sha}` });
   }
   for (const run of runs) {
     // Only runs some plan accepts cost the two lookups of their workflow run.

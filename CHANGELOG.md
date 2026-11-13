@@ -4,20 +4,25 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
-### Breaking
+### Added
 
-- A tree counts as verified only for the platform it was checked on (owner decision 2026-11-13). `verified-tree.yml`, `actions/verified-tree` and `repo-kit verified-tree` take `platform` (`REPO_KIT_PLATFORM`; `<os>-<arch>` in Node's names, by default the lookup runner's) and count a commit status only when its context ends with that platform (the local gate's `Library checks (local, linux-x64)`, or `.../linux-x64` for a status another tool posts), and a check run only when its job's runner labels name no other OS or architecture; a new `platform` output says which platform counted. A green local gate on the Mac no longer skips a Linux run; a second run of the tree on the same platform still does. A status context naming no platform, such as the `Library checks (local, macOS)` of 0.6.0 and older, counts for none.
-- The local release gate's commit status names OS and architecture: `Library checks (local, darwin-arm64)` instead of `Library checks (local, macOS)`. `publish` accepts either; a branch protection rule requiring the old context needs the new one.
-- The optional Playwright peer is `>=1.57.0`, the first release that launches the `moz-firefox` channel `shoot --browser=firefox` uses.
+- The changelog check fails an Unreleased `### Breaking` entry that lacks an indented line `No transition period: <why>`, saying why a transition period could not avoid the break. Only Unreleased is checked; released sections stay as they are.
+
+### Changed
+
+- A tree counts as verified only for the platform it was checked on (owner decision 2026-11-13). `verified-tree.yml`, `actions/verified-tree` and `repo-kit verified-tree` take `platform` (`REPO_KIT_PLATFORM`; `<os>-<arch>` in Node's names, by default the lookup runner's) and count a commit status only when its context ends with that platform (the local gate's `Library checks (local, linux-x64)`, or `.../linux-x64` for a status another tool posts), and a check run only when its job's runner labels name no other OS or architecture; a new `platform` output says which platform counted. A green local gate on the Mac no longer skips a Linux run; a second run of the tree on the same platform still does. The deprecated `Library checks (local, macOS)` counts for macOS on any architecture (`darwin-*`), `(local, Linux)` and `(local, Windows)` likewise. Nothing to change on upgrade.
+- The local release gate also records its commit status as `Library checks (local, <os>-<arch>)`, such as `Library checks (local, darwin-arm64)`, beside the old `Library checks (local, macOS)`. `publish` accepts either. A branch protection rule can require the new context now.
+- `repo-kit shoot --browser=firefox` on a Playwright older than 1.57.0 (the first that launches the `moz-firefox` channel) fails at once, naming the version it needs and the one installed. The optional Playwright peer stays `>=1.50.0`; the other browsers need nothing new.
+- `repo-kit shoot`: a story the Vite overlay never leaves, or one on Storybook's error display, gets no picture and the run fails naming it after the others; such a story used to be pictured with exit 0.
+
+### Deprecated
+
+- The local release gate's status context `Library checks (local, macOS)` (and `(local, Linux)`, `(local, Windows)`): the gate writes it beside `Library checks (local, <os>-<arch>)` until the next batched minor release removes it. Move branch protection rules to the new context.
 
 ### Fixed
 
 - `repo-kit shoot` (the overall review in repo-kit#3): the image decode no longer waits forever on an image that never loaded; the Vite overlay counts as a shown story, so its reloads run; SIGTERM and SIGHUP close the browser first, also one still launching, give up on a hung close after 10 s and exit at once on a second signal; Safari treats a safaridriver a killed run started (recorded by pid and start time) as dead and any other as live, stops its driver on every failed launch, quits only the automation window its own session started, fails a viewport narrower than Safari allows and warns about a shorter one.
 - `packed-consumer` installs the optional peers the repository pins again, leaving out only those it declares no version of.
-
-### Changed
-
-- `repo-kit shoot`: a story the Vite overlay never leaves, or one on Storybook's error display, gets no picture and the run fails naming it after the others; such a story used to be pictured with exit 0.
 
 ## 0.6.0 - 2026-11-12
 

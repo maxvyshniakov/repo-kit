@@ -436,9 +436,10 @@ then fails naming them.
 | `webkit` | Playwright's WebKit. It renders like Safari but has none of Safari's scrolling or settings: static layout only. |
 | `safari` | Safari Technology Preview over its own `safaridriver`. Viewport pictures only (WebDriver), `fullPage` is ignored. |
 
-Playwright stays the repository's own pinned devDependency (1.57 or later, the first that launches the
-`moz-firefox` channel): repo-kit declares it as an optional peer and loads it from
-the repository root, and `safari` needs none. `firefox` needs Firefox installed.
+Playwright stays the repository's own pinned devDependency: repo-kit declares it as an optional peer (`>=1.50.0`)
+and loads it from the repository root, and `safari` needs none. `firefox` needs Firefox installed and Playwright 1.57
+or later, the first that launches the `moz-firefox` channel; on an older one `--browser=firefox` fails before it
+starts, naming both versions, and the other browsers run as before.
 
 Safari itself refuses WebDriver while the user has it open, so `safari` drives Safari Technology Preview, which runs
 beside it. One-time setup: `brew install --cask safari-technology-preview` (the installer asks for an
@@ -507,7 +508,9 @@ bun run release:publish
    Chromium through the mirror, and fails if the commit declares browser checks but has no Playwright.
 
 On a pass it records the commit status `Library checks (local, darwin-arm64)` (the gate's `<os>-<arch>`, in Node's
-names; repo-kit 0.6.0 and older wrote `(local, macOS)`) with a summary: host, duration, kit version,
+names) and, with the same state, the deprecated `Library checks (local, macOS)` (`Linux`, `Windows`) that repo-kit 0.6.0
+and older wrote, so a branch protection rule requiring the old name keeps passing; the next batched minor release stops
+writing the old name. The status carries a summary: host, duration, kit version,
 the number of software-compositing Chromium launches, and the local log, `.git/repo-kit-gate/<sha>.log`. A failure
 records `failure`. Without a token with `repo` scope it refuses to start.
 
@@ -548,7 +551,8 @@ the runner out of the release path entirely; it is not wired up.
 
 Repo-Kit does not need branch protection or a ruleset: the commit statuses are the record and `publish` the
 enforcement. If a repository enables protection, require `Library checks (local, darwin-arm64)` under gate `local`, or the
-`check.yml` jobs under gate `ci`, not both.
+`check.yml` jobs under gate `ci`, not both. A rule that still requires the deprecated `Library checks (local, macOS)`
+passes until the next batched minor; move it to the new context before then.
 
 ## GITHUB_TOKEN
 
@@ -670,8 +674,9 @@ main. `verified-tree.yml` looks for such a result before the heavy jobs start:
    The platform is part of the plan: a tree counts as verified only for the OS and architecture it was checked on
    (`platform`, `<os>-<arch>` in Node's names, by default the lookup runner's). A commit status counts only when its
    context ends with that platform, in the local gate's parentheses (`Library checks (local, linux-x64)`) or after
-   a slash (`verified-tree/linux-x64`, for a status another tool posts); a context naming no platform, such as the `(local, macOS)` of repo-kit
-   0.6.0 and older, counts for none. A check run counts unless its job's runner labels name another OS or
+   a slash (`verified-tree/linux-x64`, for a status another tool posts). The deprecated gate context
+   `Library checks (local, macOS)` (`Linux`, `Windows`) names the OS only and counts for it on any architecture
+   (`darwin-*`); any other context naming no platform counts for none. A check run counts unless its job's runner labels name another OS or
    architecture: GitHub's hosted images by name (`ubuntu-*` and `windows-*` are x64 unless `-arm`, `macos-*` arm64
    but for `macos-13`, `-intel` and `-large`) and a self-hosted runner's `Linux`, `macOS`, `Windows`, `X64`, `ARM64`.
    Pass `platform` when the heavy jobs run on another runner than the lookup. A green local gate
@@ -730,6 +735,22 @@ None of the workflows uses `pull_request_target`. Do not route pull requests fro
 repo-kit follows the same changelog rules as the libraries. Consumer-visible changes go under `## Unreleased`.
 Changelog sections: Breaking, Added, Changed, Deprecated, Removed, Fixed and Security. Before 1.0.0, a breaking
 change is a minor release.
+
+- **Compatible first.** A new form comes in beside the old one, and the old one is marked Deprecated with the release
+  that removes it. A change is Breaking only when a consumer must act on upgrade and no transition period could avoid
+  it.
+- **Removals are batched.** Deprecated forms go together in one minor release, not one at a time.
+- **Release when a consumer needs it**, or on a cadence, not after every change. Fixes can still ship as patches;
+  consumers pin exact versions and upgrade when they choose.
+- **Enforced:** every `### Breaking` entry under `## Unreleased` carries an indented line saying why no transition
+  period was possible, and `check-changelogs` fails without one:
+
+  ```markdown
+  ### Breaking
+
+  - Removed the `size` prop.
+    No transition period: <why the old form could not stay, deprecated, for a while>
+  ```
 
 A release:
 

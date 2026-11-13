@@ -108,17 +108,52 @@ export function loadPlaywright(root) {
   }
 }
 
+// The first Playwright that launches the moz-firefox channel. The optional peer
+// range stays >=1.50.0: only `--browser=firefox` needs this one.
+export const FIREFOX_PLAYWRIGHT = "1.57.0";
+
+/** The version of the repository's Playwright, or undefined when it has none or it cannot be read. */
+export function playwrightVersion(root) {
+  try {
+    const require = nodeModule.createRequire(path.join(root, "package.json"));
+    let dir = path.dirname(require.resolve("playwright"));
+    for (; ;) {
+      const file = path.join(dir, "package.json");
+      if (fs.existsSync(file)) {
+        const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+        if (manifest.name === "playwright") return manifest.version;
+      }
+      if (path.dirname(dir) === dir) return undefined;
+      dir = path.dirname(dir);
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+const olderThan = (version, floor) => {
+  const [a, b] = [version, floor].map(text => text.split(/[.-]/).slice(0, 3).map(Number));
+  for (let index = 0; index < 3; index++) if (a[index] !== b[index]) return a[index] < b[index];
+  return false;
+};
+
 /**
  * Launches one engine. `playwright` is the module or a function that loads it,
  * so Safari never loads Playwright. Resolves to a Playwright Browser, or for
  * Safari the subset of one that shoot uses.
  */
-export async function launchBrowser(name, { playwright, launchSafari } = {}) {
+export async function launchBrowser(name, { playwright, playwrightVersion: version, launchSafari } = {}) {
   if (name === "safari") return (launchSafari ?? (await import("./safari.mjs")).launchSafari)();
   if (!browserNames.includes(name)) throw new Error(`Unknown browser ${name}; use ${browserNames.join(", ")}`);
   const engines = typeof playwright === "function" ? playwright() : playwright;
   if (name === "chromium") return engines.chromium.launch({ channel: "chromium" });
-  if (name === "firefox") return engines.firefox.launch({ channel: "moz-firefox" });
+  if (name === "firefox") {
+    const installed = typeof version === "function" ? version() : version;
+    if (installed && olderThan(installed, FIREFOX_PLAYWRIGHT)) {
+      throw new Error(`shoot --browser=firefox needs Playwright ${FIREFOX_PLAYWRIGHT} or later (the moz-firefox channel); this repository has ${installed}. Raise its playwright devDependency, or leave firefox out of --browser.`);
+    }
+    return engines.firefox.launch({ channel: "moz-firefox" });
+  }
   return engines.webkit.launch({});
 }
 
@@ -283,7 +318,7 @@ export async function runShoot(config, argv) {
   let playwright;
   const loadOnce = () => (playwright ??= loadPlaywright(config.root));
   await shootStories(options, {
-    launch: name => launchBrowser(name, { playwright: loadOnce }),
+    launch: name => launchBrowser(name, { playwright: loadOnce, playwrightVersion: () => playwrightVersion(config.root) }),
     storybookDir: path.resolve(config.root, config.shoot.storybookDir),
   });
   return 0;
