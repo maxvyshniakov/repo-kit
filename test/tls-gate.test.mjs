@@ -109,6 +109,13 @@ test(`${ALLOW_CA_ENV}=1 lets what the gate cannot read through, as a warning`, (
   assert.match(allowed.warnings.join("\n"), /SSL_CERT_FILE names .*missing\.pem, which the gate cannot read.*allowed unchecked/);
 }));
 
+test(`${ALLOW_CA_ENV}=1 never skips the readable bundles beside an unreadable path`, () => caFixtures(({ dir, hashed }) => {
+  const env = { [ALLOW_CA_ENV]: "1", SSL_CERT_DIR: `${path.join(dir, "nowhere")}${path.delimiter}${hashed}` };
+  const result = offlineGate({ ...clean, env });
+  assert.match(result.failures.join("\n"), /3c58f906\.0 holds AAA Certificate Services/);
+  assert.match(result.warnings.join("\n"), /nowhere, which the gate cannot read.*allowed unchecked/);
+}));
+
 test("unset or empty CA variables pass, and variables Bun does not read are not inspected", () => {
   assert.deepEqual(caEnvironment({ NODE_EXTRA_CA_CERTS: "", SSL_CERT_FILE: "", NODE_USE_SYSTEM_CA: "0", NODE_OPTIONS: "--max-old-space-size=4096" }), []);
   const result = offlineGate({ ...clean, env: { npm_config_cafile: "/nonexistent", NPM_CONFIG_CA: "junk" } });

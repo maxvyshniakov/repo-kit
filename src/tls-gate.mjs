@@ -125,8 +125,9 @@ export function caEnvironment(env) {
 }
 
 /**
- * The bundles a setting names: [{ path, certificates }], or { unreadable, reason }
- * for the first path the gate cannot read or that holds no certificate.
+ * The bundles a setting names: { bundles: [{ path, certificates }], unreadable:
+ * [{ path, reason }] }. A path the gate cannot read, or that holds no
+ * certificate, never stops it from reading the others.
  */
 function readBundles(setting, cache) {
   const read = file => {
@@ -134,6 +135,9 @@ function readBundles(setting, cache) {
     return cache.get(file);
   };
   const bundles = [];
+  const unreadable = [];
+  const cannotRead = (where, error) => unreadable.push({ path: where, reason: `which the gate cannot read (${error.code ?? error.message})` });
+  const noCertificate = where => unreadable.push({ path: where, reason: "which holds no certificate the gate can parse" });
   if (setting.dir) {
     // Like OpenSSL, a list of directories.
     for (const dir of setting.dir.split(path.delimiter).filter(Boolean)) {
@@ -141,7 +145,8 @@ function readBundles(setting, cache) {
       try {
         entries = fs.readdirSync(dir).filter(entry => CERT_DIR_ENTRY.test(entry)).sort();
       } catch (error) {
-        return { unreadable: dir, reason: `which the gate cannot read (${error.code ?? error.message})` };
+        cannotRead(dir, error);
+        continue;
       }
       let count = 0;
       for (const entry of entries) {
@@ -152,24 +157,25 @@ function readBundles(setting, cache) {
           count += certificates.length;
           bundles.push({ path: file, certificates });
         } catch (error) {
-          return { unreadable: file, reason: `which the gate cannot read (${error.code ?? error.message})` };
+          cannotRead(file, error);
         }
       }
-      if (!count) return { unreadable: dir, reason: "which holds no certificate the gate can parse" };
+      if (!count) noCertificate(dir);
     }
-    return { bundles, label: setting.dir };
+    return { bundles, unreadable, label: setting.dir };
   }
   for (const file of setting.files) {
     let certificates;
     try {
       certificates = read(file);
     } catch (error) {
-      return { unreadable: file, reason: `which the gate cannot read (${error.code ?? error.message})` };
+      cannotRead(file, error);
+      continue;
     }
-    if (!certificates.length) return { unreadable: file, reason: "which holds no certificate the gate can parse" };
+    if (!certificates.length) noCertificate(file);
     bundles.push({ path: file, certificates });
   }
-  return { bundles, label: setting.files.join(", ") };
+  return { bundles, unreadable, label: setting.files.join(", ") };
 }
 
 /**
@@ -201,10 +207,7 @@ export function offlineGate({ bunVersion = process.versions.bun, rootCertificate
     }
     if (!setting.files?.length && !setting.dir) continue;
     const read = readBundles(setting, cache);
-    if (read.unreadable) {
-      unverifiable(`${setting.name} names ${read.unreadable}, ${read.reason}`);
-      continue;
-    }
+    for (const { path: where, reason } of read.unreadable) unverifiable(`${setting.name} names ${where}, ${reason}`);
     let held = 0;
     for (const bundle of read.bundles) {
       for (const certificate of bundle.certificates) {
@@ -215,7 +218,7 @@ export function offlineGate({ bunVersion = process.versions.bun, rootCertificate
       }
     }
     const count = read.bundles.reduce((sum, bundle) => sum + bundle.certificates.length, 0);
-    if (!held) passes.push(`${setting.name}: ${count} certificate${count === 1 ? "" : "s"} in ${read.label}, no incident root`);
+    if (!held && !read.unreadable.length) passes.push(`${setting.name}: ${count} certificate${count === 1 ? "" : "s"} in ${read.label}, no incident root`);
   }
   return { failures, warnings, passes };
 }
