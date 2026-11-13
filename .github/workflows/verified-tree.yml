@@ -9,7 +9,7 @@
 #
 #   jobs:
 #     tree:
-#       uses: maxvyshniakov/repo-kit/.github/workflows/verified-tree.yml@v0.6.2
+#       uses: maxvyshniakov/repo-kit/.github/workflows/verified-tree.yml@v0.7.0
 #       permissions:
 #         contents: read
 #         checks: read
@@ -19,7 +19,7 @@
 #         plans: '{"verify": ["check / verify", "Library checks (local*"]}'
 #     check:
 #       needs: tree
-#       uses: maxvyshniakov/repo-kit/.github/workflows/verify.yml@v0.6.2
+#       uses: maxvyshniakov/repo-kit/.github/workflows/verify.yml@v0.7.0
 #       if: ${{ !cancelled() }}
 #       with:
 #         verified-url: ${{ needs.tree.result == 'success' && fromJSON(needs.tree.outputs.urls).verify || '' }}
@@ -97,7 +97,7 @@ jobs:
           echo "::error::A public repository must not run this workflow on a self-hosted runner: a pull request from a fork chooses the code it runs. Drop the runner input to use ubuntu-latest."
           exit 1
       - id: tree
-        uses: maxvyshniakov/repo-kit/actions/verified-tree@v0.6.2
+        uses: maxvyshniakov/repo-kit/actions/verified-tree@v0.7.0
         with:
           plans: ${{ inputs.plans }}
           branches: ${{ inputs.branches }}

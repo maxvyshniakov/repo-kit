@@ -221,7 +221,7 @@ runner before anything is checked out:
 ```yaml
 jobs:
   check:
-    uses: maxvyshniakov/repo-kit/.github/workflows/verify.yml@v0.6.2
+    uses: maxvyshniakov/repo-kit/.github/workflows/verify.yml@v0.7.0
     permissions:
       contents: read
       packages: read
