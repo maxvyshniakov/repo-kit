@@ -63,7 +63,12 @@ export async function main([command, ...args]) {
   }
   if (command === "tls") {
     const { runTlsGate } = await import("./tls.mjs");
-    return runTlsGate({ args: args.filter(arg => arg === "--offline" || arg === "--require-registry") }) ? 0 : 1;
+    const unknown = args.filter(arg => arg !== "--offline" && arg !== "--require-registry");
+    if (unknown.length) {
+      console.error(`repo-kit tls: unknown option ${unknown.join(" ")} (use --offline, --require-registry)`);
+      return 2;
+    }
+    return runTlsGate({ args }) ? 0 : 1;
   }
   if (!command || command === "help" || command === "--help") return usage(0);
 

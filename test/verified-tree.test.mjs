@@ -223,6 +223,24 @@ test("a tree is verified only for the platform it was checked on: a Mac result n
   for (const [context, asking, reused] of rows) assert.equal(Boolean(await lookup(context, asking)), reused, `${context} asked from ${asking}`);
 });
 
+test("a 0.6.1 gate writes both contexts: the old one then counts only where the new one names no platform", async () => {
+  const lookup = async (contexts, asking) => {
+    const { fetcher } = github({
+      commits: { [sha("a")]: TREE, [sha("b")]: TREE },
+      branches: { main: [sha("a"), sha("b")] },
+      statuses: { [sha("b")]: contexts.map(context => ({ context, state: "success", target_url: context })) },
+    });
+    const accepting = { verify: ["Library checks (local*"] };
+    return (await findVerified({ repository: REPO, sha: sha("a"), plans: accepting, branches: ["main"], token: "token", fetcher, workflow, platform: asking })).plans.verify;
+  };
+  const intel = ["Library checks (local, darwin-x64)", "Library checks (local, macOS)"];
+  assert.equal(await lookup(intel, "darwin-arm64"), null, "an Intel Mac's gate does not stand for Apple silicon");
+  assert.equal((await lookup(intel, "darwin-x64")).check, "Library checks (local, darwin-x64)");
+  assert.equal(await lookup(["Library checks (local, linux-arm64)", "Library checks (local, Linux)"], "linux-x64"), null);
+  // A 0.6.0 gate wrote the old context alone.
+  assert.equal((await lookup(["Library checks (local, macOS)"], "darwin-arm64")).check, "Library checks (local, macOS)");
+});
+
 test("a status context names its platform at its end, after a slash or in the gate's parentheses", () => {
   assert.equal(contextPlatform("Library checks (local, darwin-arm64)"), "darwin-arm64");
   assert.equal(contextPlatform("verified-tree/linux-x64"), "linux-x64");

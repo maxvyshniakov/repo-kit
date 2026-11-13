@@ -64,6 +64,12 @@ test("a CA-adding environment fails the gate unless allowed; allowed, its bundle
     assert.match(offlineGate({ ...clean, env: { ...allow, NODE_EXTRA_CA_CERTS: bad } }).failures.join("\n"), /NODE_EXTRA_CA_CERTS adds emSign/);
     assert.match(offlineGate({ ...clean, env: { ...allow, SSL_CERT_DIR: certs } }).failures.join("\n"), /SSL_CERT_DIR adds AAA Certificate Services/);
     assert.match(offlineGate({ ...clean, env: { ...allow, SSL_CERT_FILE: path.join(dir, "missing.pem") } }).failures.join("\n"), /SSL_CERT_FILE: cannot read its certificates/);
+    // --use-openssl-ca reads SSL_CERT_FILE/SSL_CERT_DIR, scanned on their own; without them OpenSSL's default store, unread.
+    const openssl = offlineGate({ ...clean, env: { ...allow, NODE_OPTIONS: "--use-openssl-ca" } });
+    assert.deepEqual(openssl.failures, []);
+    assert.match(openssl.warnings.join("\n"), /NODE_OPTIONS adds OpenSSL's default store/);
+    // SSL_CERT_DIR may list several directories.
+    assert.match(offlineGate({ ...clean, env: { ...allow, SSL_CERT_DIR: `${path.join(dir, "empty")}${path.delimiter}${certs}` } }).failures.join("\n"), /SSL_CERT_DIR adds AAA Certificate Services/);
     // The OS store cannot be read offline: allowed, it only warns.
     const system = offlineGate({ ...clean, env: { ...allow, NODE_USE_SYSTEM_CA: "1" } });
     assert.deepEqual(system.failures, []);

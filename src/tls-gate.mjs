@@ -87,7 +87,9 @@ export function caEnvironment(env) {
     else if (upper === "NPM_CONFIG_CA") found.push({ name, text: value });
     else if (upper === "NODE_USE_SYSTEM_CA" && value !== "0") found.push({ name, files: null });
     else if ((upper === "NODE_OPTIONS" || upper === "BUN_OPTIONS") && CA_FLAGS.test(value)) {
-      found.push({ name, files: /--use-system-ca/.test(value) ? null : [] });
+      if (/--use-system-ca/.test(value)) found.push({ name, files: null });
+      // --use-openssl-ca reads SSL_CERT_FILE and SSL_CERT_DIR, scanned on their own; without them OpenSSL's default store.
+      else found.push({ name, files: env.SSL_CERT_FILE || env.SSL_CERT_DIR ? [] : null, store: "OpenSSL's default store" });
     }
   }
   return found;
@@ -96,7 +98,8 @@ export function caEnvironment(env) {
 function bundleText(setting) {
   if (setting.text) return setting.text;
   if (setting.dir) {
-    return fs.readdirSync(setting.dir).map(file => path.join(setting.dir, file))
+    // Like OpenSSL, a list of directories; one that does not exist adds nothing.
+    return setting.dir.split(path.delimiter).filter(dir => fs.existsSync(dir)).flatMap(dir => fs.readdirSync(dir).map(file => path.join(dir, file)))
       .filter(file => fs.statSync(file, { throwIfNoEntry: false })?.isFile())
       .map(file => fs.readFileSync(file, "utf8")).join("\n");
   }
@@ -127,7 +130,7 @@ export function offlineGate({ bunVersion = process.versions.bun, rootCertificate
   }
   for (const setting of settings) {
     if (setting.files === null) {
-      warnings.push(`${setting.name} adds the operating system's store, which the gate cannot read; ${ALLOW_CA_ENV}=1 allows it unchecked`);
+      warnings.push(`${setting.name} adds ${setting.store ?? "the operating system's store"}, which the gate cannot read; ${ALLOW_CA_ENV}=1 allows it unchecked`);
       continue;
     }
     let text;

@@ -282,12 +282,15 @@ export async function runReleaseGate(config, args = [], deps = {}) {
   const attest = async ({ passed, seconds, browser }) => {
     if (!options.attest) return passed ? 0 : 1;
     const description = statusDescription({ passed, host, platform, kitVersion: KIT_VERSION, seconds, log: logLabel, browser });
-    let posted = await postStatus(repository(), sha, { state: passed ? "success" : "failure", context, description }, token, fetcher);
-    for (const legacy of legacyContexts) {
-      if (posted.ok) posted = await postStatus(repository(), sha, { state: passed ? "success" : "failure", context: legacy, description }, token, fetcher);
-    }
+    const posted = await postStatus(repository(), sha, { state: passed ? "success" : "failure", context, description }, token, fetcher);
     if (posted.ok) {
       print(`release-gate: recorded "${context}" = ${passed ? "success" : "failure"} on ${short}: ${description}`);
+      // The deprecated name, for a protection rule that still requires it; publish and verified-tree need the new one only.
+      for (const legacy of legacyContexts) {
+        const old = await postStatus(repository(), sha, { state: passed ? "success" : "failure", context: legacy, description }, token, fetcher);
+        if (old.ok) print(`release-gate: also recorded the deprecated "${legacy}"`);
+        else stderr.write(`release-gate: warning: the deprecated "${legacy}" was not recorded (${old.message}); a protection rule requiring it will wait\n`);
+      }
       return passed ? 0 : 1;
     }
     if (posted.unknownCommit) {

@@ -161,10 +161,13 @@ async function passedResults(get, repository, sha, accepted, workflow, platform)
   ]);
   const passed = [];
   const seen = new Set();
+  // A gate that wrote its platform also wrote the deprecated OS-only context; only the platform one counts then.
+  const platformGate = statuses.some(status => status.context?.startsWith("Library checks (local, ") && !LEGACY_GATE.test(status.context) && contextPlatform(status.context));
   for (const status of statuses) {
     // The API lists a commit's statuses newest first: the first per context is current.
     if (seen.has(status.context)) continue;
     seen.add(status.context);
+    if (platformGate && LEGACY_GATE.test(status.context)) continue;
     if (status.state === "success" && contextCounts(status.context, platform)) passed.push({ name: status.context, url: status.target_url || `https://github.com/${repository}/commit/${sha}` });
   }
   for (const run of runs) {

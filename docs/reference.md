@@ -583,7 +583,9 @@ Bun 1.4.4 rejects all 12 fixtures, because its root store no longer holds the ro
   `NODE_USE_SYSTEM_CA`, `--use-system-ca` or `--use-openssl-ca` in `NODE_OPTIONS` or `BUN_OPTIONS`,
   `npm_config_cafile` and `npm_config_ca`. `REPO_KIT_TLS_ALLOW_CA_ENV=1` allows them; the gate then reads each
   bundle they name and fails if one holds an incident root or cannot be read. The operating system's store
-  (`NODE_USE_SYSTEM_CA`, `--use-system-ca`) cannot be read offline: allowed, it only warns.
+  (`NODE_USE_SYSTEM_CA`, `--use-system-ca`) and OpenSSL's default store (`--use-openssl-ca` without `SSL_CERT_FILE`
+  or `SSL_CERT_DIR`) cannot be read offline: allowed, they only warn. A `cafile` or `ca` in a repository's
+  `.npmrc` or `bunfig.toml` is repository content, reviewed with it, and not checked here.
 
 The live probe is secondary. It asks `registry.npmjs.org` and the 12 `*.we-have-a-problem.com` incident hosts with
 both the `fetch` and `https` clients, all side by side (10 s timeout each; about 0.5 s when they answer). It fails
@@ -695,7 +697,8 @@ main. `verified-tree.yml` looks for such a result before the heavy jobs start:
    context ends with that platform, in the local gate's parentheses (`Library checks (local, linux-x64)`) or after
    a slash (`verified-tree/linux-x64`, for a status another tool posts). The deprecated gate context
    `Library checks (local, macOS)` (`Linux`, `Windows`) names the OS only and counts for it on any architecture
-   (`darwin-*`); any other context naming no platform counts for none. A check run counts unless its job's runner labels name another OS or
+   (`darwin-*`), but only on a commit without a gate status naming its platform: a 0.6.1 gate writes both, and then
+   only the platform one counts. Any other context naming no platform counts for none. A check run counts unless its job's runner labels name another OS or
    architecture: GitHub's hosted images by name (`ubuntu-*` and `windows-*` are x64 unless `-arm`, `macos-*` arm64
    but for `macos-13`, `-intel` and `-large`) and a self-hosted runner's `Linux`, `macOS`, `Windows`, `X64`, `ARM64`.
    Pass `platform` when the heavy jobs run on another runner than the lookup. A green local gate

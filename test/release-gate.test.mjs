@@ -59,6 +59,19 @@ test("the attestation is a commit status named by the platform that ran the gate
   assert.equal(localContext(), `Library checks (local, ${process.platform}-${process.arch})`);
 });
 
+test("a failed post of the deprecated context only warns: the new one is recorded", async () => {
+  const fixture = gateFixture();
+  try {
+    fixture.github.failContext = "Library checks (local, macOS)";
+    const { result, output } = await fixture.gate();
+    assert.equal(result, 0, output);
+    assert.match(output, /recorded "Library checks \(local, darwin-arm64\)" = success/);
+    assert.match(output, /warning: the deprecated "Library checks \(local, macOS\)" was not recorded/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("publish reads the newest local gate status on the commit and ignores other contexts", () => {
   const local = (state, description = state) => ({ context: "Library checks (local, macOS)", state, description });
   assert.equal(attestationState([]).state, "missing");
@@ -160,6 +173,7 @@ esac
     if (url.includes(`/commits/${sha}/statuses`)) return { ok: true, status: 200, json: async () => github.statuses };
     if (url.endsWith(`/statuses/${sha}`) && options.method === "POST") {
       if (!github.commitKnown) return { ok: false, status: 422, statusText: "Unprocessable", json: async () => ({ message: `No commit found for SHA: ${sha}` }) };
+      if (github.failContext && JSON.parse(options.body).context === github.failContext) return { ok: false, status: 500, statusText: "Server Error", json: async () => ({ message: "boom" }) };
       github.statuses.unshift(JSON.parse(options.body));
       return { ok: true, status: 201, json: async () => ({}) };
     }
