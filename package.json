@@ -1,6 +1,6 @@
 {
   "name": "@maxvyshniakov/repo-kit",
-  "version": "0.7.0",
+  "version": "0.6.0",
   "type": "module",
   "description": "Shared verification, pre-push, release and publish tooling for Bun-based JavaScript and TypeScript libraries.",
   "keywords": ["bun", "verify", "pre-push", "release", "changelog", "github-actions", "monorepo"],
