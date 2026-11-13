@@ -7,11 +7,12 @@
 // The gate is offline and deterministic, and takes milliseconds:
 // - the runtime is Bun BUN_VERSION or later (1.3.14 trusted the chains);
 // - none of the incident roots is in tls.rootCertificates, by SHA-256 fingerprint;
-// - no environment variable adds certificate authorities (NODE_EXTRA_CA_CERTS,
-//   SSL_CERT_FILE, SSL_CERT_DIR, NODE_USE_SYSTEM_CA, --use-system-ca or
-//   --use-openssl-ca in NODE_OPTIONS or BUN_OPTIONS, npm_config_cafile/ca),
-//   unless REPO_KIT_TLS_ALLOW_CA_ENV=1 allows them; then the bundles they name
-//   must not hold an incident root either.
+// - the bundles the CA variables Bun 1.4.4 reads name (NODE_EXTRA_CA_CERTS,
+//   SSL_CERT_FILE, SSL_CERT_DIR) hold none of the incident roots either, and can
+//   be read; stores it cannot read offline (NODE_USE_SYSTEM_CA, --use-system-ca,
+//   --use-openssl-ca without SSL_CERT_FILE/SSL_CERT_DIR in NODE_OPTIONS or
+//   BUN_OPTIONS) fail. REPO_KIT_TLS_ALLOW_CA_ENV=1 lets what the gate cannot
+//   read through with a warning; an incident root fails regardless.
 //
 // The live probe is secondary and has a sunset (LIVE_PROBE_SUNSET): from that
 // day on, the incident hosts are not asked. Its requests run side by side. It
@@ -44,7 +45,6 @@ export const INCIDENT_ROOTS = [
 ];
 
 export const ALLOW_CA_ENV = "REPO_KIT_TLS_ALLOW_CA_ENV";
-const CA_FILE_VARIABLES = new Set(["NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "NPM_CONFIG_CAFILE"]);
 const CA_FLAGS = /(^|\s)--use-(system|openssl)-ca(\s|$)/;
 
 export const INCIDENT_HOSTS = ["dv-g3b", "dv-g3c", "ov-g3b", "ov-g3c", "ev-g3b", "ev-g3c"]
@@ -60,22 +60,52 @@ const TRUST_ERRORS = new Set([
 ]);
 const TIMEOUT_MS = 10000;
 
-const pemsIn = text => text.match(/-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/g) ?? [];
-function present(pems, roots) {
-  const have = new Set(pems.map(pem => {
+// PEM certificates, also OpenSSL's TRUSTED CERTIFICATE form (the DER, then trust settings), which OpenSSL and BoringSSL load.
+const PEM = /-----BEGIN (TRUSTED )?CERTIFICATE-----([^-]+)-----END \1?CERTIFICATE-----/g;
+
+/** The DER element at the start of `der` (a certificate's outer SEQUENCE), without what follows it. */
+function firstElement(der) {
+  if (der.length < 2) return der;
+  const first = der[1];
+  if (first < 0x80) return der.subarray(0, 2 + first);
+  const count = first & 0x7f;
+  let length = 0;
+  for (let i = 0; i < count; i++) length = length * 256 + der[2 + i];
+  return der.subarray(0, 2 + count + length);
+}
+
+/** The certificates in a PEM text that parse, as X509Certificate. */
+export function certificatesIn(text) {
+  const certificates = [];
+  for (const [, trusted, body] of text.matchAll(PEM)) {
     try {
-      return new X509Certificate(pem).fingerprint256.replaceAll(":", "");
+      const der = Buffer.from(body.replace(/\s+/g, ""), "base64");
+      certificates.push(new X509Certificate(trusted ? firstElement(der) : der));
     } catch {
-      return null;
+      // Not a certificate this gate can parse; it cannot add trust Bun would use either.
     }
-  }));
+  }
+  return certificates;
+}
+
+const fingerprint = certificate => certificate.fingerprint256.replaceAll(":", "");
+const incidentRootOf = (certificate, roots) => roots.find(root => root.sha256 === fingerprint(certificate));
+function present(pems, roots) {
+  const have = new Set(pems.flatMap(pem => certificatesIn(pem).map(fingerprint)));
   return roots.filter(root => have.has(root.sha256));
 }
 
+// The variables Bun 1.4.4 reads for extra trust, with or without --use-openssl-ca (tried against a local
+// server). It ignores npm_config_cafile and npm_config_ca, so they are not inspected.
+const CA_FILE_VARIABLES = new Set(["NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"]);
+// The names OpenSSL's hashed-directory lookup loads (<subject hash>.<n>; .r<n> are CRLs), plus the .pem/.crt
+// files such a directory keeps beside them or in place of them.
+const CERT_DIR_ENTRY = /^([0-9a-f]{8}\.\d+|.*\.(pem|crt))$/i;
+
 /**
- * The environment's CA-adding settings, each { name } with what to scan:
- * `files`, `dir` or `text`, `files: []` for nothing of its own (--use-openssl-ca
- * reads SSL_CERT_FILE and SSL_CERT_DIR), `files: null` for the OS store.
+ * The environment's CA-adding settings, each { name } with what to read: `files`
+ * or `dir`, `files: []` for nothing of its own (--use-openssl-ca reads
+ * SSL_CERT_FILE and SSL_CERT_DIR), `files: null` for a store the gate cannot read.
  */
 export function caEnvironment(env) {
   const found = [];
@@ -84,26 +114,62 @@ export function caEnvironment(env) {
     const upper = name.toUpperCase();
     if (CA_FILE_VARIABLES.has(upper)) found.push({ name, files: [value] });
     else if (upper === "SSL_CERT_DIR") found.push({ name, dir: value });
-    else if (upper === "NPM_CONFIG_CA") found.push({ name, text: value });
     else if (upper === "NODE_USE_SYSTEM_CA" && value !== "0") found.push({ name, files: null });
     else if ((upper === "NODE_OPTIONS" || upper === "BUN_OPTIONS") && CA_FLAGS.test(value)) {
       if (/--use-system-ca/.test(value)) found.push({ name, files: null });
-      // --use-openssl-ca reads SSL_CERT_FILE and SSL_CERT_DIR, scanned on their own; without them OpenSSL's default store.
+      // --use-openssl-ca reads SSL_CERT_FILE and SSL_CERT_DIR, read on their own; without them OpenSSL's default store.
       else found.push({ name, files: env.SSL_CERT_FILE || env.SSL_CERT_DIR ? [] : null, store: "OpenSSL's default store" });
     }
   }
   return found;
 }
 
-function bundleText(setting) {
-  if (setting.text) return setting.text;
+/**
+ * The bundles a setting names: [{ path, certificates }], or { unreadable, reason }
+ * for the first path the gate cannot read or that holds no certificate.
+ */
+function readBundles(setting, cache) {
+  const read = file => {
+    if (!cache.has(file)) cache.set(file, certificatesIn(fs.readFileSync(file, "utf8")));
+    return cache.get(file);
+  };
+  const bundles = [];
   if (setting.dir) {
-    // Like OpenSSL, a list of directories; one that does not exist adds nothing.
-    return setting.dir.split(path.delimiter).filter(dir => fs.existsSync(dir)).flatMap(dir => fs.readdirSync(dir).map(file => path.join(dir, file)))
-      .filter(file => fs.statSync(file, { throwIfNoEntry: false })?.isFile())
-      .map(file => fs.readFileSync(file, "utf8")).join("\n");
+    // Like OpenSSL, a list of directories.
+    for (const dir of setting.dir.split(path.delimiter).filter(Boolean)) {
+      let entries;
+      try {
+        entries = fs.readdirSync(dir).filter(entry => CERT_DIR_ENTRY.test(entry)).sort();
+      } catch (error) {
+        return { unreadable: dir, reason: `which the gate cannot read (${error.code ?? error.message})` };
+      }
+      let count = 0;
+      for (const entry of entries) {
+        const file = path.join(dir, entry);
+        if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) continue;
+        try {
+          const certificates = read(file);
+          count += certificates.length;
+          bundles.push({ path: file, certificates });
+        } catch (error) {
+          return { unreadable: file, reason: `which the gate cannot read (${error.code ?? error.message})` };
+        }
+      }
+      if (!count) return { unreadable: dir, reason: "which holds no certificate the gate can parse" };
+    }
+    return { bundles, label: setting.dir };
   }
-  return setting.files.map(file => fs.readFileSync(file, "utf8")).join("\n");
+  for (const file of setting.files) {
+    let certificates;
+    try {
+      certificates = read(file);
+    } catch (error) {
+      return { unreadable: file, reason: `which the gate cannot read (${error.code ?? error.message})` };
+    }
+    if (!certificates.length) return { unreadable: file, reason: "which holds no certificate the gate can parse" };
+    bundles.push({ path: file, certificates });
+  }
+  return { bundles, label: setting.files.join(", ") };
 }
 
 /**
@@ -122,27 +188,34 @@ export function offlineGate({ bunVersion = process.versions.bun, rootCertificate
   for (const root of trusted) failures.push(`the runtime's root store holds ${root.name} (SHA-256 ${root.sha256})`);
   if (!trusted.length) passes.push(`none of the ${roots.length} incident roots is among the runtime's ${rootCertificates.length} roots`);
 
-  const settings = caEnvironment(env);
-  if (settings.length && env[ALLOW_CA_ENV] !== "1") {
-    const names = settings.map(setting => setting.name).join(", ");
-    failures.push(`${names} add${settings.length === 1 ? "s" : ""} certificate authorities beyond the runtime's own; unset ${settings.length === 1 ? "it" : "them"}, or set ${ALLOW_CA_ENV}=1 to allow ${settings.length === 1 ? "it" : "them"} as long as no bundle holds an incident root`);
-    return { failures, warnings, passes };
-  }
-  for (const setting of settings) {
+  // What the gate cannot read fails, unless ALLOW_CA_ENV lets it through unchecked.
+  const allowed = env[ALLOW_CA_ENV] === "1";
+  const unverifiable = line => allowed
+    ? warnings.push(`${line}; allowed unchecked by ${ALLOW_CA_ENV}=1`)
+    : failures.push(`${line}; unset it, or set ${ALLOW_CA_ENV}=1 to allow it unchecked`);
+  const cache = new Map();
+  for (const setting of caEnvironment(env)) {
     if (setting.files === null) {
-      warnings.push(`${setting.name} adds ${setting.store ?? "the operating system's store"}, which the gate cannot read; ${ALLOW_CA_ENV}=1 allows it unchecked`);
+      unverifiable(`${setting.name} adds ${setting.store ?? "the operating system's store"}, which the gate cannot read`);
       continue;
     }
-    let text;
-    try {
-      text = bundleText(setting);
-    } catch (error) {
-      failures.push(`${setting.name}: cannot read its certificates (${error.message})`);
+    if (!setting.files?.length && !setting.dir) continue;
+    const read = readBundles(setting, cache);
+    if (read.unreadable) {
+      unverifiable(`${setting.name} names ${read.unreadable}, ${read.reason}`);
       continue;
     }
-    const held = present(pemsIn(text), roots);
-    for (const root of held) failures.push(`${setting.name} adds ${root.name} (SHA-256 ${root.sha256})`);
-    if (!held.length) passes.push(`${setting.name}, allowed by ${ALLOW_CA_ENV}=1, adds no incident root`);
+    let held = 0;
+    for (const bundle of read.bundles) {
+      for (const certificate of bundle.certificates) {
+        const root = incidentRootOf(certificate, roots);
+        if (!root) continue;
+        held++;
+        failures.push(`${setting.name}: ${bundle.path} holds ${root.name} (subject ${certificate.subject.replaceAll("\n", ", ")}; SHA-256 ${root.sha256})`);
+      }
+    }
+    const count = read.bundles.reduce((sum, bundle) => sum + bundle.certificates.length, 0);
+    if (!held) passes.push(`${setting.name}: ${count} certificate${count === 1 ? "" : "s"} in ${read.label}, no incident root`);
   }
   return { failures, warnings, passes };
 }

@@ -579,13 +579,19 @@ Bun 1.4.4 rejects all 12 fixtures, because its root store no longer holds the ro
 - the runtime is Bun 1.4.4 or later;
 - `tls.rootCertificates` holds none of the incident roots, by SHA-256 fingerprint: emSign ECC Root CA - G3,
   emSign Root TLS CA - G3, emSign Root CS CA - G3, and AAA Certificate Services (the Sectigo cross-signs chain to it);
-- no environment variable adds certificate authorities: `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR`,
-  `NODE_USE_SYSTEM_CA`, `--use-system-ca` or `--use-openssl-ca` in `NODE_OPTIONS` or `BUN_OPTIONS`,
-  `npm_config_cafile` and `npm_config_ca`. `REPO_KIT_TLS_ALLOW_CA_ENV=1` allows them; the gate then reads each
-  bundle they name and fails if one holds an incident root or cannot be read. The operating system's store
-  (`NODE_USE_SYSTEM_CA`, `--use-system-ca`) and OpenSSL's default store (`--use-openssl-ca` without `SSL_CERT_FILE`
-  or `SSL_CERT_DIR`) cannot be read offline: allowed, they only warn. A `cafile` or `ca` in a repository's
-  `.npmrc` or `bunfig.toml` is repository content, reviewed with it, and not checked here.
+- the bundles the CA variables Bun 1.4.4 reads name hold none of them either. Bun 1.4.4 adds the certificates of
+  `NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE` (PEM files) and `SSL_CERT_DIR` (directories, separated like `PATH`) to
+  both its `fetch` and `https` clients, with or without `--use-openssl-ca`, so the gate reads each of them: every PEM
+  certificate (also OpenSSL's `TRUSTED CERTIFICATE` form) in the file, and in each directory the files OpenSSL's
+  lookup loads (`<subject hash>.<n>`, such as `3c58f906.0`; not the `.r<n>` CRLs) and any `.pem` or `.crt` beside them.
+  A certificate whose SHA-256 fingerprint is an incident root's fails the gate, naming the variable, the file and the
+  certificate's subject. Bun ignores `npm_config_cafile` and `npm_config_ca`, which are not inspected;
+- what the gate cannot verify fails: a variable naming a path it cannot read, a file or directory with no certificate
+  it can parse, and stores it cannot read offline, the operating system's (`NODE_USE_SYSTEM_CA`, `--use-system-ca` in
+  `NODE_OPTIONS` or `BUN_OPTIONS`) and OpenSSL's default store (`--use-openssl-ca` without `SSL_CERT_FILE` or
+  `SSL_CERT_DIR`). `REPO_KIT_TLS_ALLOW_CA_ENV=1` lets exactly these through unchecked, as warnings; it never allows a
+  bundle that holds an incident root. A `cafile` or `ca` in a repository's `.npmrc` or `bunfig.toml` is repository
+  content, reviewed with it, and not checked here.
 
 The live probe is secondary. It asks `registry.npmjs.org` and the 12 `*.we-have-a-problem.com` incident hosts with
 both the `fetch` and `https` clients, all side by side (10 s timeout each; about 0.5 s when they answer). It fails

@@ -40,42 +40,89 @@ test("the gate fails a root store that holds an incident root, naming it", () =>
   assert.match(failures[0], /root store holds AAA Certificate Services \(SHA-256 D7A7A0FB/);
 });
 
-test("a CA-adding environment fails the gate unless allowed; allowed, its bundles must hold no incident root", () => {
+// A scratch directory with a clean bundle, a bundle holding an incident root and SSL_CERT_DIR layouts.
+function caFixtures(run) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "repo-kit-tls-"));
   try {
-    const safe = path.join(dir, "safe.pem");
-    fs.writeFileSync(safe, tls.rootCertificates.slice(0, 3).join("\n"));
-    const bad = path.join(dir, "bad.pem");
-    fs.writeFileSync(bad, `${tls.rootCertificates[0]}\n${incidentPem("emSign ECC Root CA - G3")}`);
-    const certs = path.join(dir, "certs");
-    fs.mkdirSync(certs);
-    fs.writeFileSync(path.join(certs, "a.0"), incidentPem("AAA Certificate Services"));
-
-    for (const env of [{ NODE_EXTRA_CA_CERTS: safe }, { SSL_CERT_FILE: safe }, { SSL_CERT_DIR: dir }, { NODE_USE_SYSTEM_CA: "1" },
-      { NODE_OPTIONS: "--use-system-ca" }, { BUN_OPTIONS: "--max-old-space-size=1 --use-openssl-ca" }, { npm_config_cafile: safe }, { NPM_CONFIG_CA: tls.rootCertificates[0] }]) {
-      const [name] = Object.keys(env);
-      assert.match(offlineGate({ ...clean, env }).failures.join("\n"), new RegExp(`${name} adds certificate authorities.*${ALLOW_CA_ENV}=1`), name);
-    }
-    // Empty or switched-off settings add nothing.
-    assert.deepEqual(caEnvironment({ NODE_EXTRA_CA_CERTS: "", NODE_USE_SYSTEM_CA: "0", NODE_OPTIONS: "--max-old-space-size=4096" }), []);
-
-    const allow = { [ALLOW_CA_ENV]: "1" };
-    assert.deepEqual(offlineGate({ ...clean, env: { ...allow, NODE_EXTRA_CA_CERTS: safe, SSL_CERT_FILE: safe, NODE_OPTIONS: "--use-openssl-ca" } }).failures, []);
-    assert.match(offlineGate({ ...clean, env: { ...allow, NODE_EXTRA_CA_CERTS: bad } }).failures.join("\n"), /NODE_EXTRA_CA_CERTS adds emSign/);
-    assert.match(offlineGate({ ...clean, env: { ...allow, SSL_CERT_DIR: certs } }).failures.join("\n"), /SSL_CERT_DIR adds AAA Certificate Services/);
-    assert.match(offlineGate({ ...clean, env: { ...allow, SSL_CERT_FILE: path.join(dir, "missing.pem") } }).failures.join("\n"), /SSL_CERT_FILE: cannot read its certificates/);
-    // --use-openssl-ca reads SSL_CERT_FILE/SSL_CERT_DIR, scanned on their own; without them OpenSSL's default store, unread.
-    const openssl = offlineGate({ ...clean, env: { ...allow, NODE_OPTIONS: "--use-openssl-ca" } });
-    assert.deepEqual(openssl.failures, []);
-    assert.match(openssl.warnings.join("\n"), /NODE_OPTIONS adds OpenSSL's default store/);
-    // SSL_CERT_DIR may list several directories.
-    assert.match(offlineGate({ ...clean, env: { ...allow, SSL_CERT_DIR: `${path.join(dir, "empty")}${path.delimiter}${certs}` } }).failures.join("\n"), /SSL_CERT_DIR adds AAA Certificate Services/);
-    // The OS store cannot be read offline: allowed, it only warns.
-    const system = offlineGate({ ...clean, env: { ...allow, NODE_USE_SYSTEM_CA: "1" } });
-    assert.deepEqual(system.failures, []);
-    assert.match(system.warnings.join("\n"), /NODE_USE_SYSTEM_CA adds the operating system's store/);
+    const write = (name, text) => (fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true }), fs.writeFileSync(path.join(dir, name), text), path.join(dir, name));
+    run({
+      dir,
+      safe: write("safe.pem", tls.rootCertificates.slice(0, 3).join("\n")),
+      bad: write("bad.pem", `${tls.rootCertificates[0]}\n${incidentPem("emSign ECC Root CA - G3")}`),
+      // OpenSSL's c_rehash layout: <subject hash>.<n>, beside a CRL (.r0) and a README that are not certificates.
+      hashed: path.dirname(write("hashed/3c58f906.0", incidentPem("AAA Certificate Services"))),
+      plain: path.dirname(write("plain/roots.crt", tls.rootCertificates.slice(0, 2).join("\n"))),
+      write,
+      missing: path.join(dir, "missing.pem"),
+    });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("CA bundle variables pass when their bundles hold no incident root, without the override", () => caFixtures(({ safe, plain, write }) => {
+  write("plain/README", "not a certificate");
+  write("plain/3c58f906.r0", "a CRL is not read");
+  const result = offlineGate({ ...clean, env: { NODE_EXTRA_CA_CERTS: safe, SSL_CERT_FILE: safe, SSL_CERT_DIR: plain, NODE_OPTIONS: "--use-openssl-ca" } });
+  assert.deepEqual(result.failures, []);
+  assert.deepEqual(result.warnings, []);
+  assert.match(result.passes.join("\n"), /NODE_EXTRA_CA_CERTS: 3 certificates in .*safe\.pem, no incident root/);
+  assert.match(result.passes.join("\n"), /SSL_CERT_DIR: 2 certificates in .*plain, no incident root/);
+}));
+
+test("a bundle holding an incident root fails, naming the variable, the file and the subject; the override does not allow it", () => caFixtures(({ bad }) => {
+  for (const env of [{ NODE_EXTRA_CA_CERTS: bad }, { SSL_CERT_FILE: bad }, { NODE_EXTRA_CA_CERTS: bad, [ALLOW_CA_ENV]: "1" }]) {
+    const failures = offlineGate({ ...clean, env }).failures;
+    assert.equal(failures.length, 1, JSON.stringify(env));
+    assert.match(failures[0], new RegExp(`${Object.keys(env)[0]}: .*bad\\.pem holds emSign ECC Root CA - G3 \\(subject .*CN=emSign ECC Root CA - G3.*SHA-256 86A1ECBA`));
+  }
+}));
+
+test("SSL_CERT_DIR is read like OpenSSL: hashed names and .pem/.crt files, in each listed directory", () => caFixtures(({ hashed, plain, write }) => {
+  assert.match(offlineGate({ ...clean, env: { SSL_CERT_DIR: hashed } }).failures.join("\n"), /SSL_CERT_DIR: .*hashed.3c58f906\.0 holds AAA Certificate Services \(subject .*CN=AAA Certificate Services/);
+  assert.match(offlineGate({ ...clean, env: { SSL_CERT_DIR: `${plain}${path.delimiter}${hashed}` } }).failures.join("\n"), /3c58f906\.0 holds AAA Certificate Services/);
+  write("plain/extra.pem", incidentPem("emSign Root TLS CA - G3"));
+  assert.match(offlineGate({ ...clean, env: { SSL_CERT_DIR: plain } }).failures.join("\n"), /extra\.pem holds emSign Root TLS CA - G3/);
+  // OpenSSL's TRUSTED CERTIFICATE form: the DER followed by its trust settings.
+  const der = Buffer.concat([new X509Certificate(incidentPem("emSign Root CS CA - G3")).raw, Buffer.from([0x30, 0x00])]);
+  const trusted = path.dirname(write("trusted/aux.pem", `-----BEGIN TRUSTED CERTIFICATE-----\n${der.toString("base64")}\n-----END TRUSTED CERTIFICATE-----\n`));
+  assert.match(offlineGate({ ...clean, env: { SSL_CERT_DIR: trusted } }).failures.join("\n"), /aux\.pem holds emSign Root CS CA - G3/);
+  // A name OpenSSL does not look up is not read.
+  const other = path.dirname(write("other/root.txt", incidentPem("emSign Root CS CA - G3")));
+  write("other/0123abcd.1", tls.rootCertificates[0]);
+  assert.deepEqual(offlineGate({ ...clean, env: { SSL_CERT_DIR: other } }).failures, []);
+}));
+
+test("a missing path, an unreadable one or a bundle without certificates fails, naming variable and path", () => caFixtures(({ dir, missing, write }) => {
+  assert.match(offlineGate({ ...clean, env: { SSL_CERT_FILE: missing } }).failures.join("\n"), new RegExp(`SSL_CERT_FILE names ${missing.replace(/[.\\]/g, "\\$&")}, which the gate cannot read`));
+  assert.match(offlineGate({ ...clean, env: { NODE_EXTRA_CA_CERTS: write("key.pem", "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n") } }).failures.join("\n"), /NODE_EXTRA_CA_CERTS names .*key\.pem, which holds no certificate the gate can parse/);
+  assert.match(offlineGate({ ...clean, env: { SSL_CERT_DIR: path.join(dir, "nowhere") } }).failures.join("\n"), /SSL_CERT_DIR names .*nowhere, which the gate cannot read/);
+  const empty = path.join(dir, "empty");
+  fs.mkdirSync(empty);
+  assert.match(offlineGate({ ...clean, env: { SSL_CERT_DIR: empty } }).failures.join("\n"), /SSL_CERT_DIR names .*empty, which holds no certificate the gate can parse/);
+  assert.match(offlineGate({ ...clean, env: { SSL_CERT_FILE: missing } }).failures.join("\n"), new RegExp(`${ALLOW_CA_ENV}=1`));
+}));
+
+test(`${ALLOW_CA_ENV}=1 lets what the gate cannot read through, as a warning`, () => caFixtures(({ missing, safe }) => {
+  const allowed = offlineGate({ ...clean, env: { [ALLOW_CA_ENV]: "1", SSL_CERT_FILE: missing, NODE_EXTRA_CA_CERTS: safe } });
+  assert.deepEqual(allowed.failures, []);
+  assert.match(allowed.warnings.join("\n"), /SSL_CERT_FILE names .*missing\.pem, which the gate cannot read.*allowed unchecked/);
+}));
+
+test("unset or empty CA variables pass, and variables Bun does not read are not inspected", () => {
+  assert.deepEqual(caEnvironment({ NODE_EXTRA_CA_CERTS: "", SSL_CERT_FILE: "", NODE_USE_SYSTEM_CA: "0", NODE_OPTIONS: "--max-old-space-size=4096" }), []);
+  const result = offlineGate({ ...clean, env: { npm_config_cafile: "/nonexistent", NPM_CONFIG_CA: "junk" } });
+  assert.deepEqual(result.failures, []);
+  assert.deepEqual(result.warnings, []);
+});
+
+test("stores the gate cannot read offline fail unless allowed; allowed, they warn", () => {
+  for (const env of [{ NODE_USE_SYSTEM_CA: "1" }, { NODE_OPTIONS: "--use-system-ca" }, { BUN_OPTIONS: "--max-old-space-size=1 --use-openssl-ca" }]) {
+    const [name] = Object.keys(env);
+    assert.match(offlineGate({ ...clean, env }).failures.join("\n"), new RegExp(`${name} adds .*store, which the gate cannot read; unset it, or set ${ALLOW_CA_ENV}=1`), name);
+    const allowed = offlineGate({ ...clean, env: { ...env, [ALLOW_CA_ENV]: "1" } });
+    assert.deepEqual(allowed.failures, [], name);
+    assert.match(allowed.warnings.join("\n"), new RegExp(`${name} adds`), name);
   }
 });
 
@@ -182,7 +229,7 @@ test("runGate: a failed offline gate fails without the live probe; --offline ski
   assert.equal(required, true);
 });
 
-test("on this Bun the offline gate passes in milliseconds and an unallowed CA variable fails it", { skip: spawnSync("bun", ["--version"]).status !== 0 && "no bun" }, () => {
+test("on this Bun the offline gate passes in milliseconds and a CA variable naming no bundle fails it", { skip: spawnSync("bun", ["--version"]).status !== 0 && "no bun" }, () => {
   const env = { ...process.env };
   for (const name of Object.keys(env)) if (caEnvironment({ [name]: env[name] }).length || name === ALLOW_CA_ENV) delete env[name];
   const passed = spawnSync("bun", [TLS_GATE, "--offline"], { env, encoding: "utf8" });
@@ -190,5 +237,5 @@ test("on this Bun the offline gate passes in milliseconds and an unallowed CA va
   assert.match(passed.stdout, /PASS gate: none of the 4 incident roots/);
   const injected = spawnSync("bun", [TLS_GATE, "--offline"], { env: { ...env, SSL_CERT_FILE: TLS_GATE }, encoding: "utf8" });
   assert.equal(injected.status, 1);
-  assert.match(injected.stdout, /FAIL gate: SSL_CERT_FILE adds certificate authorities/);
+  assert.match(injected.stdout, /FAIL gate: SSL_CERT_FILE names .*tls-gate\.mjs, which holds no certificate the gate can parse/);
 });
