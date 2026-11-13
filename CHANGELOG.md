@@ -4,6 +4,8 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+## 0.6.2 - 2026-11-13
+
 ### Fixed
 
 - The TLS gate no longer fails a machine just because `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, as on a Mac with Homebrew's CA bundle. It reads the bundles they name (files, and the hashed-name and `.pem`/`.crt` files of the directories) and fails only when one holds an eMudhra incident root, naming the variable, the file and the certificate's subject, or when it cannot read a named path or finds no certificate there. `REPO_KIT_TLS_ALLOW_CA_ENV=1` now only lets such unreadable paths, and the operating system's and OpenSSL's default stores, through unchecked; it never allows an incident root. `npm_config_cafile` and `npm_config_ca`, which Bun does not read, are no longer checked. Nothing to change on upgrade; a machine that set `REPO_KIT_TLS_ALLOW_CA_ENV=1` only for a CA bundle can drop it.
