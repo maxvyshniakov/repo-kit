@@ -8,7 +8,7 @@
 #
 #   jobs:
 #     check:
-#       uses: maxvyshniakov/repo-kit/.github/workflows/verify.yml@v0.6.0
+#       uses: maxvyshniakov/repo-kit/.github/workflows/verify.yml@v0.7.0
 #
 # The caller grants contents: read and packages: read.
 name: verify
@@ -81,7 +81,7 @@ jobs:
         with:
           fetch-depth: ${{ inputs.fetch-depth }}
       - if: inputs.verified-url == ''
-        uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.6.0
+        uses: maxvyshniakov/repo-kit/actions/setup-bun@v0.7.0
       - if: inputs.verified-url == ''
         run: bun run verify -- $RELEASE_ARGS $VERIFY_ARGS
         env:
