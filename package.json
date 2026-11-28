@@ -1,6 +1,6 @@
 {
   "name": "@maxvyshniakov/package-kit",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "module",
   "description": "Shared verification, pre-push, release and publish tooling for Bun-based JavaScript and TypeScript libraries.",
   "keywords": ["bun", "verify", "pre-push", "release", "changelog", "github-actions", "monorepo"],

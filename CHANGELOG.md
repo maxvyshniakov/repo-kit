@@ -4,6 +4,8 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+## 1.2.0 - 2026-11-28
+
 ### Added
 
 - Export `@maxvyshniakov/package-kit/test-hygiene` (`src/test-hygiene.mjs`) with unified JS/TS lexical masking (`maskJs`) and consolidated shrink-only rules: `classname-split`, `css-file-read`, `unasserted-computed-style-spy`, `browser-fixed-sleep`, `unfiltered-console-spy`, and `inline-browser-mock` (Refs #28).
