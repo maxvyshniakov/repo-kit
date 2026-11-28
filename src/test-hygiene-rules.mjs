@@ -424,23 +424,30 @@ function isNonZeroDelay(expr) {
 /** Collect local sleep wrapper functions whose body wraps `new Promise(... setTimeout(..., param))`. */
 function collectSleepWrappers(codeOnly) {
   const wrappers = [];
-  const parseParams = paramList => paramList
-    .split(",")
-    .map(p => p.trim().replace(/^\.\.\./, "").match(/^(\w+)/)?.[1] ?? null);
+  const parseParams = paramList => paramList.split(",").map(raw => {
+    const trimmed = raw.trim().replace(/^\.\.\./, "");
+    const name = trimmed.match(/^(\w+)/)?.[1] ?? null;
+    const eqIdx = trimmed.indexOf("=");
+    const defaultExpr = eqIdx === -1 ? null : trimmed.slice(eqIdx + 1).trim();
+    return { name, defaultExpr };
+  });
 
   const inspect = (name, paramList, bodyStart, bodyEnd, defStart, defEnd) => {
     const body = codeOnly.slice(bodyStart, bodyEnd);
     if (!/\bnew\s+Promise\b/.test(body) || !/\bsetTimeout\s*\(/.test(body)) return;
     const params = parseParams(paramList);
     for (const m of body.matchAll(/\bsetTimeout\s*\(/g)) {
-      const openParen = bodyStart + m.index + m[0].length - 1;
+      const absTimeout = bodyStart + m.index;
+      if (hasPairedClearTimeout(codeOnly, absTimeout)) continue;
+      const openParen = absTimeout + m[0].length - 1;
       const call = parseCallArgs(codeOnly, openParen);
       if (!call || call.args.length < 2) continue;
       const delayExpr = codeOnly.slice(call.args[1].start, call.args[1].end);
       for (let idx = 0; idx < params.length; idx++) {
-        if (params[idx] && new RegExp(`\\b${escapeRe(params[idx])}\\b`).test(delayExpr)) {
+        if (params[idx].name && new RegExp(`\\b${escapeRe(params[idx].name)}\\b`).test(delayExpr)) {
           const scope = enclosingScope(codeOnly, defStart);
-          wrappers.push({ name, paramIndex: idx, scopeStart: scope.start, scopeEnd: scope.end, defStart, defEnd });
+          const defaultNonZero = Boolean(params[idx].defaultExpr && isNonZeroDelay(params[idx].defaultExpr));
+          wrappers.push({ name, paramIndex: idx, defaultNonZero, scopeStart: scope.start, scopeEnd: scope.end, defStart, defEnd });
           return;
         }
       }
@@ -498,14 +505,9 @@ function stringContainsFixedSleep(rawLiteral) {
   for (const m of codeOnly.matchAll(/\bsetTimeout\s*\(/g)) {
     const openParen = m.index + m[0].length - 1;
     const call = parseCallArgs(codeOnly, openParen);
-    if (!call) continue;
-    if (call.args.length >= 2) {
-      const delayExpr = codeOnly.slice(call.args[1].start, call.args[1].end);
-      if (isNonZeroDelay(delayExpr)) return true;
-    } else if (call.args.length === 1) {
-      const delayExpr = codeOnly.slice(call.args[0].start, call.args[0].end);
-      if (isNonZeroDelay(delayExpr)) return true;
-    }
+    if (!call || call.args.length < 2) continue;
+    const delayExpr = codeOnly.slice(call.args[1].start, call.args[1].end);
+    if (isNonZeroDelay(delayExpr)) return true;
   }
   return false;
 }
@@ -588,6 +590,8 @@ export function browserFixedSleepFindings(text, masked = maskJs(text)) {
     record(m.index, end, "fixed browser sleep");
   }
 
+  const hasTimersPromises = /\bfrom\s+["'`](?:node:)?timers\/promises["'`]/.test(noComments);
+
   // 2. Direct `setTimeout(...)` (inside `new Promise` or bare without `clearTimeout`, excluding `0` yields and wrapper definitions)
   for (const m of codeOnly.matchAll(SET_TIMEOUT_CALL)) {
     if (inWrapperDef(m.index)) continue;
@@ -596,10 +600,15 @@ export function browserFixedSleepFindings(text, masked = maskJs(text)) {
     if (!call || !call.args.length) continue;
     const end = call.end + 1;
 
-    // 1-arg `setTimeout(ms)` (timers/promises) vs 2+-arg `setTimeout(cb, ms)`
-    const delayArg = call.args.length >= 2 ? call.args[1] : call.args[0];
-    const delayExpr = codeOnly.slice(delayArg.start, delayArg.end);
-    if (!isNonZeroDelay(delayExpr)) continue;
+    if (call.args.length >= 2) {
+      const delayExpr = codeOnly.slice(call.args[1].start, call.args[1].end);
+      if (!isNonZeroDelay(delayExpr)) continue;
+    } else {
+      // 1-arg `setTimeout(cb)` is a 0-delay macrotask yield; only `timers/promises` `setTimeout(ms)` or a positive numeric literal is a wait.
+      const arg0 = codeOnly.slice(call.args[0].start, call.args[0].end).trim();
+      const isPositiveLiteral = POSITIVE_NUMBER.test(arg0) && Number(arg0.replaceAll("_", "")) > 0;
+      if (!isPositiveLiteral && !(hasTimersPromises && isNonZeroDelay(arg0))) continue;
+    }
     if (hasPairedClearTimeout(codeOnly, m.index)) continue;
     record(m.index, end, "fixed browser sleep");
   }
@@ -614,9 +623,13 @@ export function browserFixedSleepFindings(text, masked = maskJs(text)) {
       if (/\bfunction\s+$/.test(codeOnly.slice(Math.max(0, absIdx - 20), absIdx))) continue;
       const openParen = absIdx + m[0].length - 1;
       const call = parseCallArgs(codeOnly, openParen);
-      if (!call || !call.args[wrapper.paramIndex]) continue;
+      if (!call) continue;
       const arg = call.args[wrapper.paramIndex];
-      if (!isNonZeroDelay(codeOnly.slice(arg.start, arg.end))) continue;
+      if (arg) {
+        if (!isNonZeroDelay(codeOnly.slice(arg.start, arg.end))) continue;
+      } else if (!wrapper.defaultNonZero) {
+        continue;
+      }
       record(absIdx, call.end + 1, `fixed browser sleep via ${wrapper.name}()`);
     }
   }
@@ -676,12 +689,13 @@ export function browserFixedSleepFindings(text, masked = maskJs(text)) {
 
 // ---- Rule 5: unfiltered-console-spy ----------------------------------------
 
-const CONSOLE_SPY_ARGS = /^\s*console\s*,\s*["'`](?:error|warn)["'`]\s*,?\s*$/;
+const CONSOLE_SPY_ARGS = /^\s*console\s*,\s*["'`](error|warn)["'`]\s*,?\s*$/;
 const MOCK_SUPPRESS = /^\s*\.\s*(?:mockImplementation(?:Once)?|mockReturnValue(?:Once)?)\s*\(/;
+const POSITIVE_CALL_ITEM_MATCHER = /^\s*\.\s*(?!not\b)(?:toBe|toEqual|toStrictEqual|toContain|toMatch|toMatchObject|toHaveProperty|toBeDefined|toBeTruthy)\s*\(/;
 
-/** Whether `scopeCode` asserts total call accountability on `spyName`. */
-function isConsoleSpyAccountedFor(scopeCode, spyName) {
-  const n = escapeRe(spyName);
+/** Whether `scopeCode` asserts total call accountability on `targetPattern` (a spy variable or `console.error`/`console.warn`). */
+function isConsoleSpyAccountedFor(scopeCode, targetPattern) {
+  const n = targetPattern;
   const optMsg = "(?:\\s*,\\s*[^)]*)?";
 
   // 1. Zero-call assertions:
@@ -717,10 +731,16 @@ function isConsoleSpyAccountedFor(scopeCode, spyName) {
     || new RegExp(`\\bexpect\\s*\\(\\s*${n}\\s*\\.\\s*mock\\s*\\.\\s*calls\\s*\\.\\s*length${optMsg}\\s*\\)\\s*\\.\\s*(?:toBe|toEqual)\\s*\\(\\s*[^)]+\\)`).test(scopeCode);
 
   if (hasExactCount) {
-    const hasPositiveArgs =
-      new RegExp(`\\bexpect\\s*\\(\\s*${n}${optMsg}\\s*\\)\\s*\\.\\s*(?:toHaveBeen(?:Last|Nth)?CalledWith|toBeCalledWith)\\s*\\(`).test(scopeCode)
-      || new RegExp(`\\bexpect\\s*\\(\\s*${n}\\s*\\.\\s*mock\\s*\\.\\s*calls\\s*\\[`).test(scopeCode);
-    if (hasPositiveArgs) return true;
+    if (new RegExp(`\\bexpect\\s*\\(\\s*${n}${optMsg}\\s*\\)\\s*\\.\\s*(?:toHaveBeen(?:Last|Nth)?CalledWith|toBeCalledWith)\\s*\\(`).test(scopeCode)) {
+      return true;
+    }
+    const callItemRe = new RegExp(`\\bexpect\\s*\\(\\s*${n}\\s*\\.\\s*mock\\s*\\.\\s*calls\\s*\\[`, "g");
+    for (const m of scopeCode.matchAll(callItemRe)) {
+      const expectOpen = scopeCode.indexOf("(", m.index);
+      const expectClose = findMatchingClose(scopeCode, expectOpen);
+      const after = scopeCode.slice(expectClose + 1, expectClose + 80);
+      if (POSITIVE_CALL_ITEM_MATCHER.test(after)) return true;
+    }
   }
 
   return false;
@@ -754,7 +774,9 @@ export function unfilteredConsoleSpyFindings(text, masked = maskJs(text)) {
     const call = parseCallArgs(codeOnly, openParen);
     if (!call) continue;
     const rawArgs = noComments.slice(openParen + 1, call.end);
-    if (!CONSOLE_SPY_ARGS.test(rawArgs)) continue;
+    const consoleMatch = rawArgs.match(CONSOLE_SPY_ARGS);
+    if (!consoleMatch) continue;
+    const consoleMethod = consoleMatch[1];
 
     const before = codeOnly.slice(Math.max(0, match.index - 160), match.index);
     const assign = before.match(ASSIGNED_BEFORE);
@@ -773,24 +795,26 @@ export function unfilteredConsoleSpyFindings(text, masked = maskJs(text)) {
     }
     if (!isSuppressing) continue;
 
-    if (spyName) {
-      if (isBeforeEachBody(codeOnly, immediateScope)) {
-        // A beforeEach spy must be verified in a paired afterEach within the enclosing describe/declaration scope.
-        const outerScope = findDeclarationScope(codeOnly, immediateScope.start, spyName);
-        const afterBodies = collectAfterEachBodies(codeOnly.slice(outerScope.start, outerScope.end));
-        if (afterBodies.some(body => isConsoleSpyAccountedFor(body, spyName))) continue;
-      } else {
-        // Check the test/function scope containing the spy (including try/finally around it).
-        const scope = declaredName ? immediateScope : findDeclarationScope(codeOnly, match.index, spyName);
-        const searchStart = declaredName ? match.index : scope.start;
-        // If spy was declared at describe level but assigned inside a single it(), stay within the immediate it() scope.
-        const effectiveScope = !declaredName && immediateScope.start > scope.start && !/\btry\s*$/.test(codeOnly.slice(Math.max(0, immediateScope.start - 20), immediateScope.start))
-          ? immediateScope
-          : scope;
-        if (isConsoleSpyAccountedFor(codeOnly.slice(effectiveScope === scope ? searchStart : effectiveScope.start, effectiveScope.end), spyName)) {
-          continue;
-        }
+    const targetPattern = spyName ? escapeRe(spyName) : `console\\s*\\.\\s*${consoleMethod}`;
+    if (isBeforeEachBody(codeOnly, immediateScope)) {
+      // A beforeEach spy must be verified in a paired afterEach within the enclosing describe/declaration scope.
+      const outerScope = spyName
+        ? findDeclarationScope(codeOnly, immediateScope.start, spyName)
+        : enclosingScope(codeOnly, immediateScope.start);
+      const afterBodies = collectAfterEachBodies(codeOnly.slice(outerScope.start, outerScope.end));
+      if (afterBodies.some(body => isConsoleSpyAccountedFor(body, targetPattern))) continue;
+    } else if (spyName) {
+      const scope = declaredName ? immediateScope : findDeclarationScope(codeOnly, match.index, spyName);
+      const searchStart = declaredName ? match.index : scope.start;
+      // If spy was declared at describe level but assigned inside a single it(), stay within the immediate it() scope.
+      const effectiveScope = !declaredName && immediateScope.start > scope.start && !/\btry\s*$/.test(codeOnly.slice(Math.max(0, immediateScope.start - 20), immediateScope.start))
+        ? immediateScope
+        : scope;
+      if (isConsoleSpyAccountedFor(codeOnly.slice(effectiveScope === scope ? searchStart : effectiveScope.start, effectiveScope.end), targetPattern)) {
+        continue;
       }
+    } else if (isConsoleSpyAccountedFor(codeOnly.slice(match.index, immediateScope.end), targetPattern)) {
+      continue;
     }
 
     const line = lineAt(text, match.index);
@@ -808,10 +832,12 @@ export function unfilteredConsoleSpyFindings(text, masked = maskJs(text)) {
 const STUB_GLOBAL_CALL = /(?:\b(?:vi|jest)\s*\.\s*)?\bstubGlobal\s*\(/g;
 const DEFINE_PROPERTY_CALL = /\bObject\s*\.\s*defineProperty\s*\(/g;
 const BROWSER_MOCK_NAME = /^["'`](?:ResizeObserver|matchMedia)["'`]$/;
-const GLOBAL_RECEIVER = /^(?:window|globalThis|global|self)$/;
-const DIRECT_ASSIGN_GLOBAL = /\b(?:window|globalThis|global|self)\s*\.\s*(ResizeObserver|matchMedia)\s*=(?!=)/g;
-const SAVED_GLOBAL_DECL = /\b(?:const|let|var)\s+(\w+)\s*(?::[^=;\n]+)?=\s*(?:window|globalThis|global|self)\s*\.\s*(?:ResizeObserver|matchMedia)\b/g;
-const SAVED_GLOBAL_REASSIGN = /\b(\w+)\s*=\s*(?:window|globalThis|global|self)\s*\.\s*(?:ResizeObserver|matchMedia)\b/g;
+const GLOBAL_RECEIVER_EXPR = /^\s*\(*\s*(?:window|globalThis|global|self)\b(?:\s+as\s+[^)]+)?\s*\)*\s*$/;
+const DIRECT_ASSIGN_DOT = /(?:\(\s*)?\b(?:window|globalThis|global|self)\b(?:\s+as\s+[^)]+)?\s*\)?\s*\.\s*(ResizeObserver|matchMedia)\s*=(?!=)/g;
+const DIRECT_ASSIGN_BRACKET = /(?:\(\s*)?\b(?:window|globalThis|global|self)\b(?:\s+as\s+[^)]+)?\s*\)?\s*\[\s*(["'`])\s*\1\s*\]\s*=(?!=)/g;
+const SAVED_GLOBAL_DECL = /\b(?:const|let|var)\s+(\w+)\s*(?::[^=;\n]+)?=\s*(?:\(\s*)?(?:window|globalThis|global|self)\b(?:\s+as\s+[^)]+)?\s*\)?\s*\.\s*(?:ResizeObserver|matchMedia)\b(?!\s*\()/g;
+const SAVED_GLOBAL_REASSIGN = /\b(\w+)\s*=\s*(?:\(\s*)?(?:window|globalThis|global|self)\b(?:\s+as\s+[^)]+)?\s*\)?\s*\.\s*(?:ResizeObserver|matchMedia)\b(?!\s*\()/g;
+const RESTORE_IDENT_RHS = /^(\w+)\s*(?:!|(?:\s+as\s+[^;)\n}]+)*)\s*(?:[;)\n}]|$)/;
 const INLINE_RO_CLASS = /\bclass\s+(\w*ResizeObserver\w*)\b|\bclass\s+\w+\s+implements\s+ResizeObserver\b/g;
 
 export function inlineBrowserMockFindings(text, masked = maskJs(text)) {
@@ -819,10 +845,17 @@ export function inlineBrowserMockFindings(text, masked = maskJs(text)) {
   const seen = new Set();
   const found = [];
 
-  // Variables holding the original global so restoration lines (`globalThis.ResizeObserver = original`) are not flagged.
-  const savedOriginals = new Set();
-  for (const m of codeOnly.matchAll(SAVED_GLOBAL_DECL)) savedOriginals.add(m[1]);
-  for (const m of codeOnly.matchAll(SAVED_GLOBAL_REASSIGN)) savedOriginals.add(m[1]);
+  // Scoped variables holding the original global so restoration lines (`globalThis.ResizeObserver = original`) are not flagged.
+  const savedOriginals = [];
+  for (const m of codeOnly.matchAll(SAVED_GLOBAL_DECL)) {
+    savedOriginals.push({ name: m[1], scope: enclosingScope(codeOnly, m.index) });
+  }
+  for (const m of codeOnly.matchAll(SAVED_GLOBAL_REASSIGN)) {
+    savedOriginals.push({ name: m[1], scope: findDeclarationScope(codeOnly, m.index, m[1]) });
+  }
+  const isSavedOriginalAt = (ident, pos) => savedOriginals.some(
+    entry => entry.name === ident && pos >= entry.scope.start && pos <= entry.scope.end,
+  );
 
   const record = (pos, end, label) => {
     const line = lineAt(text, pos);
@@ -842,36 +875,48 @@ export function inlineBrowserMockFindings(text, masked = maskJs(text)) {
     record(m.index, call.end + 1, `inline ${arg0.slice(1, -1)} stub`);
   }
 
-  // 2. Object.defineProperty(window | globalThis | global | self, "ResizeObserver" | "matchMedia", ...)
+  // 2. Object.defineProperty(window | globalThis | global | self [as ...], "ResizeObserver" | "matchMedia", ...)
   for (const m of codeOnly.matchAll(DEFINE_PROPERTY_CALL)) {
     const openParen = m.index + m[0].length - 1;
     const call = parseCallArgs(codeOnly, openParen);
     if (!call || call.args.length < 2) continue;
     const target = codeOnly.slice(call.args[0].start, call.args[0].end).trim();
     const prop = noComments.slice(call.args[1].start, call.args[1].end).trim();
-    if (!GLOBAL_RECEIVER.test(target) || !BROWSER_MOCK_NAME.test(prop)) continue;
+    if (!GLOBAL_RECEIVER_EXPR.test(target) || !BROWSER_MOCK_NAME.test(prop)) continue;
     record(m.index, call.end + 1, `inline ${prop.slice(1, -1)} defineProperty`);
   }
 
-  // 3. vi.spyOn(window | globalThis | global | self, "ResizeObserver" | "matchMedia")
+  // 3. vi.spyOn(window | globalThis | global | self [as ...], "ResizeObserver" | "matchMedia")
   for (const m of codeOnly.matchAll(SPY_ON_CALL)) {
     const openParen = m.index + m[0].length - 1;
     const call = parseCallArgs(codeOnly, openParen);
     if (!call || call.args.length < 2) continue;
     const target = codeOnly.slice(call.args[0].start, call.args[0].end).trim();
     const prop = noComments.slice(call.args[1].start, call.args[1].end).trim();
-    if (!GLOBAL_RECEIVER.test(target) || !BROWSER_MOCK_NAME.test(prop)) continue;
+    if (!GLOBAL_RECEIVER_EXPR.test(target) || !BROWSER_MOCK_NAME.test(prop)) continue;
     record(m.index, call.end + 1, `inline ${prop.slice(1, -1)} spy`);
   }
 
-  // 4. Direct assignment: `window.matchMedia = ...` / `globalThis.ResizeObserver = ...` (excluding restore of saved original)
-  for (const m of codeOnly.matchAll(DIRECT_ASSIGN_GLOBAL)) {
+  // 4. Direct assignment (dot or bracket, with optional TS cast): `window.matchMedia = ...`, `(globalThis as any).ResizeObserver = ...`, `window["matchMedia"] = ...`
+  for (const m of codeOnly.matchAll(DIRECT_ASSIGN_DOT)) {
     const rhsStart = m.index + m[0].length;
-    const rhsSlice = codeOnly.slice(rhsStart, rhsStart + 80).trim();
-    const ident = rhsSlice.match(/^(\w+)\s*(?:[;)\n}]|$)/)?.[1];
-    if (ident && savedOriginals.has(ident)) continue;
+    const rhsSlice = codeOnly.slice(rhsStart, rhsStart + 120).trim();
+    const ident = rhsSlice.match(RESTORE_IDENT_RHS)?.[1];
+    if (ident && isSavedOriginalAt(ident, m.index)) continue;
     const lineEnd = text.indexOf("\n", m.index);
     record(m.index, lineEnd === -1 ? text.length : lineEnd, `inline ${m[1]} assignment`);
+  }
+  for (const m of codeOnly.matchAll(DIRECT_ASSIGN_BRACKET)) {
+    const bracketOpen = codeOnly.indexOf("[", m.index);
+    const bracketClose = codeOnly.indexOf("]", bracketOpen);
+    const prop = noComments.slice(bracketOpen + 1, bracketClose).trim();
+    if (!BROWSER_MOCK_NAME.test(prop)) continue;
+    const rhsStart = m.index + m[0].length;
+    const rhsSlice = codeOnly.slice(rhsStart, rhsStart + 120).trim();
+    const ident = rhsSlice.match(RESTORE_IDENT_RHS)?.[1];
+    if (ident && isSavedOriginalAt(ident, m.index)) continue;
+    const lineEnd = text.indexOf("\n", m.index);
+    record(m.index, lineEnd === -1 ? text.length : lineEnd, `inline ${prop.slice(1, -1)} assignment`);
   }
 
   // 5. Inline ResizeObserver mock class declarations

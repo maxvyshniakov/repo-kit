@@ -594,3 +594,145 @@ test("--base, --warn-lowered, extraBaseline, browserChecks/browserExclude and mo
   assert.equal(typeof exported.unfilteredConsoleSpyFindings, "function");
   assert.equal(typeof exported.inlineBrowserMockFindings, "function");
 });
+
+test("--init writes only missing baseline files when core baseline already exists and handles extraBaseline === baseline", () => {
+  const repo = repository({
+    "test/a.test.tsx": 'expect(el.className.split(" ")).toContain("a");\nawait page.waitForTimeout(500);\n',
+  });
+  // First initialize core baseline only.
+  const first = run(repo.root, ["--init"]);
+  assert.equal(first.code, 0, first.err);
+  const originalCore = fs.readFileSync(path.join(repo.root, "test-hygiene-baseline.json"), "utf8");
+
+  // Later enable extraBaseline alongside existing core baseline: --init writes only the missing extra baseline.
+  const config = {
+    testHygiene: {
+      rules: ["fixed-sleep", "timing-assert", "classname-split"],
+      extraBaseline: "test-hygiene-extra-baseline.json",
+    },
+  };
+  const second = run(repo.root, ["--init"], config);
+  assert.equal(second.code, 0, second.err);
+  assert.match(second.out, /wrote test-hygiene-extra-baseline\.json/);
+  assert.doesNotMatch(second.out, /wrote test-hygiene-baseline\.json/);
+  assert.equal(fs.readFileSync(path.join(repo.root, "test-hygiene-baseline.json"), "utf8"), originalCore);
+  const extra = JSON.parse(fs.readFileSync(path.join(repo.root, "test-hygiene-extra-baseline.json"), "utf8"));
+  assert.deepEqual(extra.rules, { "classname-split": { "test/a.test.tsx": 1 } });
+
+  // Running --init again when all configured baselines already exist refuses with exit 1.
+  const third = run(repo.root, ["--init"], config);
+  assert.equal(third.code, 1);
+  assert.match(third.err, /exist; use --update to lower it/);
+
+  // extraBaseline === baseline is treated as a single baseline file without double-writing.
+  const sameRepo = repository({ "test/a.test.tsx": 'expect(el.className.split(" ")).toContain("a");\n' });
+  const sameCfg = {
+    testHygiene: {
+      baseline: "test-hygiene-baseline.json",
+      extraBaseline: "./test-hygiene-baseline.json",
+      rules: ["fixed-sleep", "classname-split"],
+    },
+  };
+  const sameInit = run(sameRepo.root, ["--init"], sameCfg);
+  assert.equal(sameInit.code, 0, sameInit.err);
+  const combined = JSON.parse(fs.readFileSync(path.join(sameRepo.root, "test-hygiene-baseline.json"), "utf8"));
+  assert.deepEqual(combined.rules, { "fixed-sleep": {}, "classname-split": { "test/a.test.tsx": 1 } });
+});
+
+test("--update prints an explicit message when blocked by a raised baseline", () => {
+  const repo = repository({ "test/a.test.mjs": sleepy(1) });
+  run(repo.root, ["--init"]);
+  repo.commit();
+  write(repo.root, {
+    "test-hygiene-baseline.json": JSON.stringify({ version: 1, rules: { "fixed-sleep": { "test/a.test.mjs": 2 }, "timing-assert": {} } }),
+  });
+  const res = run(repo.root, ["--update"]);
+  assert.equal(res.code, 1);
+  assert.match(res.err, /did not update test-hygiene-baseline\.json because it raises entries above the base commit/);
+  assert.match(res.err, /raises fixed-sleep for test\/a\.test\.mjs to 2 \(the base has 1\)/);
+});
+
+test("browser-fixed-sleep handles default-parameter wrappers, watchdog helpers, and 1-arg setTimeout(r) vs timers/promises", () => {
+  const text = [
+    'const settle = (ms = 300) => new Promise(r => setTimeout(r, ms));',
+    'function dwell(ms = 150) { return new Promise(r => setTimeout(r, ms)); }',
+    'const zeroDefault = (ms = 0) => new Promise(r => setTimeout(r, ms));',
+    'function waitForCond(cond, timeout) {',
+    '  return new Promise((resolve, reject) => {',
+    '    const id = setTimeout(() => reject(new Error("timeout")), timeout);',
+    '    if (cond()) { clearTimeout(id); resolve(); }',
+    '  });',
+    '}',
+    'await settle();', // positive default: flagged
+    'await settle(0);', // explicit 0: allowed
+    'await dwell();', // positive default: flagged
+    'await zeroDefault();', // 0 default: allowed
+    'await waitForCond(() => true, 5000);', // watchdog helper: allowed
+    'await new Promise(r => setTimeout(r));', // 1-arg macrotask yield: allowed
+    'browser("eval", "new Promise(r => setTimeout(r))");', // 1-arg eval yield: allowed
+    'await setTimeout(200);', // 1-arg positive numeric literal: flagged
+  ].join("\n");
+  assert.deepEqual(lines(browserFixedSleepFindings(text)), [10, 12, 17]);
+
+  const timersPromises = [
+    'import { setTimeout } from "node:timers/promises";',
+    'await setTimeout(DELAY);',
+    'await setTimeout(0);',
+  ].join("\n");
+  assert.deepEqual(lines(browserFixedSleepFindings(timersPromises)), [2]);
+});
+
+test("unfiltered-console-spy rejects negated spy.mock.calls[...] matchers and allows anonymous console.error/warn assertions", () => {
+  const text = [
+    'describe("edge cases", () => {',
+    '  it("negated mock.calls[0] does not count as positive args", () => {',
+    '    const err = vi.spyOn(console, "error").mockImplementation(() => {});',
+    '    expect(err).toHaveBeenCalledTimes(1);',
+    '    expect(err.mock.calls[0][0]).not.toContain("act");',
+    '  });',
+    '  it("positive mock.calls[0] with exact count is allowed", () => {',
+    '    const err = vi.spyOn(console, "error").mockImplementation(() => {});',
+    '    expect(err).toHaveBeenCalledTimes(1);',
+    '    expect(err.mock.calls[0][0]).toContain("expected");',
+    '  });',
+    '  it("anonymous spy verified via console.error", () => {',
+    '    vi.spyOn(console, "error").mockImplementation(() => {});',
+    '    expect(console.error).not.toHaveBeenCalled();',
+    '  });',
+    '  it("anonymous spy verified via console.warn toHaveBeenCalledTimes(0)", () => {',
+    '    vi.spyOn(console, "warn").mockImplementation(() => {});',
+    '    expect(console.warn).toHaveBeenCalledTimes(0);',
+    '  });',
+    '  it("anonymous spy without assertion still fails", () => {',
+    '    vi.spyOn(console, "error").mockImplementation(() => {});',
+    '  });',
+    '});',
+  ].join("\n");
+  assert.deepEqual(lines(unfilteredConsoleSpyFindings(text)), [3, 21]);
+});
+
+test("inline-browser-mock catches TS casts and bracket access, scopes savedOriginals, ignores matchMedia() calls, and allows typed restores", () => {
+  const text = [
+    'describe("casts and brackets", () => {',
+    '  it("flags TS casts and bracket assignments", () => {',
+    '    (globalThis as any).ResizeObserver = class {};',
+    '    (window as any).matchMedia = vi.fn();',
+    '    Object.defineProperty(window as any, "matchMedia", { value: vi.fn() });',
+    '    window["matchMedia"] = vi.fn();',
+    '  });',
+    '  it("matchMedia() call is not a saved original; typed restore in scope is allowed", () => {',
+    '    const mql = window.matchMedia("(min-width: 768px)");',
+    '    window.matchMedia = mql as any;', // NOT a restore of the function: flagged
+    '    const orig = window.matchMedia;',
+    '    window.matchMedia = vi.fn();',
+    '    window.matchMedia = orig as typeof window.matchMedia;', // restore with TS cast: allowed
+    '    window.matchMedia = orig!;', // restore with non-null assertion: allowed
+    '  });',
+    '  it("saved original from sibling it() does not exempt this block", () => {',
+    '    const orig = vi.fn();',
+    '    window.matchMedia = orig;', // sibling orig out of scope: flagged
+    '  });',
+    '});',
+  ].join("\n");
+  assert.deepEqual(lines(inlineBrowserMockFindings(text)), [3, 4, 5, 6, 10, 12, 18]);
+});

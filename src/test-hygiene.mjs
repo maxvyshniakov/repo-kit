@@ -785,9 +785,11 @@ export function runTestHygiene({ root, config = {}, args = [], env = process.env
     failed = true;
   }
 
-  // Partition rules into one or two baseline files when `extraBaseline` is configured.
+  // Partition rules into one or two baseline files when a distinct `extraBaseline` is configured.
   const groups = [];
-  if (settings.extraBaseline) {
+  const hasDistinctExtra = Boolean(settings.extraBaseline)
+    && path.resolve(root, settings.extraBaseline) !== path.resolve(root, settings.baseline);
+  if (hasDistinctExtra) {
     const core = settings.rules.filter(rule => CORE_RULES.includes(rule));
     const extra = settings.rules.filter(rule => EXTRA_RULES.includes(rule));
     if (core.length) groups.push({ name: settings.baseline, rules: core });
@@ -797,14 +799,13 @@ export function runTestHygiene({ root, config = {}, args = [], env = process.env
   }
 
   if (parsed.init) {
-    for (const group of groups) {
-      const baselineFile = path.join(root, group.name);
-      if (fs.existsSync(baselineFile)) {
-        printError(`test-hygiene: ${group.name} exists; use --update to lower it`);
-        return 1;
-      }
+    const missing = groups.filter(group => !fs.existsSync(path.join(root, group.name)));
+    if (!missing.length) {
+      const names = groups.map(group => group.name).join(", ");
+      printError(`test-hygiene: ${names} ${groups.length === 1 ? "exists" : "exist"}; use --update to lower it`);
+      return 1;
     }
-    for (const group of groups) {
+    for (const group of missing) {
       const groupCurrent = sliceObject(current, group.rules);
       writeBaseline(path.join(root, group.name), groupCurrent);
       const total = Object.values(groupCurrent).reduce((sum, map) => sum + Object.values(map).reduce((a, b) => a + b, 0), 0);
@@ -832,7 +833,9 @@ export function runTestHygiene({ root, config = {}, args = [], env = process.env
     const hasRaised = problems.some(problem => problem.raised);
 
     if (parsed.update) {
-      if (!hasRaised) {
+      if (hasRaised) {
+        printError(`test-hygiene: did not update ${group.name} because it raises entries above the base commit`);
+      } else {
         writeBaseline(baselineFile, lowered);
         for (const { rule, file, count, limit } of stale) print(`test-hygiene: lowered ${rule} ${file} ${limit} -> ${count}`);
       }

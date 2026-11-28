@@ -240,44 +240,52 @@ export default {
 | `packed-consumer [--keep]` | Packs (or, from `publish`, takes the archive it is about to upload), installs into a temporary consumer, imports every entrypoint in plain Node, type-checks under `nodenext` without `skipLibCheck`, then runs the probes. Optional peers are not installed. |
 | `shoot <story id filter...> [<url>\|--url=] [--theme=] [--width=] [--browser=] [--out=] [--viewport]` | [Story screenshots](#story-screenshots) from a running Storybook, under a lease of `shoot.slots`. |
 | `serve <dir> [--port N] [--host 127.0.0.1]` | Dependency-free HTTP/1.1 Keep-Alive [static preview server](#static-preview-server) (`@maxvyshniakov/package-kit/serve`): high socket backlog (`2048`), `Cache-Control: no-cache` for `.html` and `.json`, `public, max-age=31536000, immutable` for hashed `/assets/*`, path-traversal guard (`403`) and clean MIME types. Use instead of `python3 -m http.server`. |
-| `test-hygiene [--init\|--update]` | [Shrink-only test rules](#test-hygiene): fixed sleeps, timing assertions outside the perf suite and, opt-in, class-name and CSS-text assertions. Runs without `package-kit.config.mjs` too. |
+| `test-hygiene [--init\|--update] [--base REF] [--warn-lowered]` | [Shrink-only test rules](#test-hygiene): fixed sleeps, timing assertions outside the perf suite, and opt-in UI, CSS/DOM, browser-sleep, console-spy and browser-mock rules. Runs without `package-kit.config.mjs` too. |
 | `verified-tree` | In a workflow: links each `PACKAGE_KIT_PLANS` plan to a passed result of the same tree ([skipping a verified tree](#skipping-a-verified-tree)). |
 | `friction <log\|report\|export>` | Deprecated, moving to Mastack's `friction`; prints a deprecation line on stderr. The local [friction journal](#friction-journal): writes an event, ranks the journal, writes a redacted bundle to share. Needs no `package-kit.config.mjs`. |
 | `tls`, `adopt`, `rust` | Removed in 0.10.0: each exits 1 and says what to use instead. |
 
 ## Test hygiene
 
-`package-kit test-hygiene` scans the test files Git tracks (or would track) and counts, per rule and file:
+`package-kit test-hygiene` (also exported as `@maxvyshniakov/package-kit/test-hygiene` with unified `maskJs` and rule functions) scans the test and configured browser-check files Git tracks (or would track) and counts, per rule and file:
 
 | Rule | Finds | Allowed |
 |---|---|---|
 | `fixed-sleep` | `waitForTimeout(...)` and Python's `wait_for_timeout(...)` whatever the argument; a `new Promise(resolve => setTimeout(resolve, <n or NAME>))`, `sleep(<n>)`, `delay(<n>)` and `Bun.sleep(<n>)` of 50 ms or more; Python `time.sleep(<n>)`/`asyncio.sleep(<n>)` of 0.2 s or more; `Thread.sleep`, `Task.sleep`, a bare `sleep`/`usleep`, `runMain(for:)`, `thread::sleep` | a `sleep-ok: <reason>` comment on the line or right above it |
 | `timing-assert` | an assertion bounding a measured duration from above: `assert.ok(Date.now() - started < 2000)`, `expect(elapsed).toBeLessThan(100)` (or chai's `below`, `lessThan`, `most`), `self.assertLess(elapsed, 0.2)` (ported from Straylight's `tools/perf-budget-check.py`; also Swift and Rust) | a budget through `perfBudget` / `perf_budget`; a deadline with a literal bound of at least 30 s, or a tighter one with a `load-tolerant: <why>` comment |
 | `ui-assertion` (opt-in) | `toHaveClass(...)`, an asserted `.className`, `classList`, `getAttribute("class")`, or `.matches(".<class>")`, a string holding a CSS declaration (`"color: var(--x);"`) in an assertion | roles, states and data attributes (including `.matches("[role='button']")` and `.matches("[data-state='open']")`) |
+| `classname-split` (opt-in) | splitting `.className` strings in tests (`.className.split(...)`, `?.trim().split(...)`, `(el.className ?? "").split(...)`) | roles, states and data attributes |
+| `css-file-read` (opt-in) | reading `.css` files with `readFileSync` (directly, through tracked variables/loops/local helpers) or `readDataGridCss()` in tests | non-CSS file reads; browser/story computed-style checks |
+| `unasserted-computed-style-spy` (opt-in) | spying on `window`/`globalThis.getComputedStyle` without a positive call assertion | `toHaveBeenCalled*()`, `toHaveBeenCalledTimes(1+)`, positive `mock.calls` length/equality assertions |
+| `browser-fixed-sleep` (opt-in) | fixed sleeps in `browserChecks` minus `browserExclude`: `waitForTimeout(...)`, `new Promise(... setTimeout(..., ms))`, unpaired `setTimeout(..., ms)`, local/imported sleep wrappers (`pause`, `sleep`, `delay`, `wait`, including default-parameter wrappers), and string-evaluated sleeps in `eval`/`evaluate`/`page`/`chrome`/`browser("eval", ...)` | `setTimeout(..., 0)` and 1-arg `setTimeout(cb)` macrotask yields, `clearTimeout(<handle>)`-paired watchdogs, and `// sleep-ok: <reason>` comments |
+| `unfiltered-console-spy` (opt-in) | suppressing `spyOn(console, "error" \| "warn")` (`.mockImplementation*` / `.mockReturnValue*`) without total call accountability, including `beforeEach` spies missing `afterEach` checks, negated partial matchers, and subset filters | `expect(spy).not.toHaveBeenCalled()` (or `expect(console.error).not.toHaveBeenCalled()`), `toHaveBeenCalledTimes(0)`, exhaustive `spy.mock.calls` equality, or exact call-count paired with positive argument assertions |
+| `inline-browser-mock` (opt-in) | inline `ResizeObserver` / `matchMedia` `stubGlobal`, `Object.defineProperty`, `spyOn`, direct dot/bracket assignments (including TypeScript casts), and inline `ResizeObserver` classes in test files outside `mockAdapters` | shared adapters matching `mockAdapters` and restoring a saved original global in scope |
 
 Only the helper exempts an assertion, in the perf suite as anywhere. Each file calling it must match `perfSuite`, or its
 budgets never hold: that fails outright. The perf suite is the repository's own command: it runs those files alone,
 with `PACKAGE_KIT_PERF_BUDGETS=enforce`, and the ordinary test command leaves them out.
 
-The counts live in a baseline (`test-hygiene-baseline.json`) and only shrink:
+The counts live in a baseline (`test-hygiene-baseline.json`, plus an optional `extraBaseline` for the six extra rules) and only shrink:
 
-- `package-kit test-hygiene --init` writes today's counts; it never overwrites a baseline.
+- `package-kit test-hygiene --init` writes any missing configured baseline file(s) with today's counts; it never overwrites an existing baseline and exits 1 when all configured baselines already exist.
 - The check fails when a file gains a finding or a new file has one, naming each line.
-- It fails when a count went down and the baseline still holds the old one: `--update` lowers it (and never raises).
-- Compared with the baseline of the base commit, no entry may rise: `PACKAGE_KIT_HYGIENE_BASE`, else where `HEAD` left
-  `origin/HEAD` or `origin/main`, else `HEAD`'s parent on that branch itself. An entry may move with its file: the
-  entries of files that no longer exist can be given to new paths.
+- It fails when a count went down and the baseline still holds the old one: `--update` lowers it (and never raises, printing a message and skipping writes for any baseline that raises entries above the base commit). `--warn-lowered` prints lowered counts as a warning and exits 0 when no growth or raise occurred (still failing on any growth, raise, or unrun perf budget).
+- Compared with the baseline of the base commit, no entry may rise. The base commit is resolved from `--base <ref>` (or `--base=<ref>`), `PACKAGE_KIT_HYGIENE_BASE`, or `PACKAGE_KIT_BASE`—an explicit base that cannot be resolved fails loudly with exit code 1. Without an explicit base, it picks the closest merge-base ancestor among `origin/dev`, `origin/HEAD`, and `origin/main` (falling back to `HEAD~1` when already on that ref, or `HEAD`). An entry may move with its file: the entries of files that no longer exist can be given to new paths.
 - Counts are per file, so one wait can replace another in the same file; the lines are printed when a count grows.
 
 ```js
 // package-kit.config.mjs, all optional
 testHygiene: {
   baseline: "test-hygiene-baseline.json",
+  // extraBaseline: "test-hygiene-extra-baseline.json", // optional separate baseline for the 6 extra rules
   tests: ["**/*.{test,spec}.{js,mjs,cjs,ts,tsx,jsx,mts,cts}", "test/**/*.{js,mjs,cjs,ts,tsx,py}", "tests/**/*.{js,mjs,cjs,ts,tsx,py,rs,swift}", /* ... */],
   exclude: ["**/node_modules/**", "**/dist/**", "**/fixtures/**"],
   perfSuite: ["**/*.perf.{js,mjs,ts,tsx}", "**/perf/**", "**/test_perf_*.py", "**/*perf*.test.*"],
+  // browserChecks: ["scripts/check-*.mjs", "scripts/*.browser.mjs", "scripts/lib/*.mjs"],
+  // browserExclude: ["**/node_modules/**", "**/dist/**"],
+  // mockAdapters: ["packages/my-lib/src/test/**"],
   ui: true,                                  // adds ui-assertion (unit tests: keep end-to-end tests out of `tests`)
-  // rules: ["fixed-sleep", "timing-assert", "ui-assertion"],  // or name them
+  // rules: ["fixed-sleep", "timing-assert", "ui-assertion", "classname-split", "css-file-read", "unasserted-computed-style-spy", "browser-fixed-sleep", "unfiltered-console-spy", "inline-browser-mock"],
 },
 ```
 
