@@ -25,7 +25,7 @@ This repository's checks use GitHub-hosted Ubuntu runners; consumer reusable wor
 
 ## Release
 
-Only on an explicit release request: follow [README versioning](../../README.md#versioning).
+Standing permission (owner, 2026-11-28): an orchestrator may cut and publish a green release to npmjs.org without asking first; follow [README versioning](../../README.md#versioning).
 Cut the version and push main, then run
 `gh workflow run release-npm.yml --repo maxvyshniakov/package-kit --ref main`: it verifies with
 `--release`, publishes to npmjs.org (trusted publishing, provenance) and tags. Publication and
