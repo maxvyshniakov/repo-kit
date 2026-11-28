@@ -26,9 +26,51 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-export const RULES = ["fixed-sleep", "timing-assert", "ui-assertion"];
+import {
+  collapseSnippet,
+  enclosingScope,
+  findDeclarationScope,
+  findMatchingClose,
+  lineAt,
+  maskJs,
+  parseCallArgs,
+} from "./test-hygiene-lex.mjs";
+import {
+  EXTRA_RULES,
+  RULE_HINTS,
+  browserFixedSleepFindings,
+  classNameSplitFindings,
+  computedStyleSpyFindings,
+  cssFileReadFindings,
+  inlineBrowserMockFindings,
+  scanExtraSource,
+  unfilteredConsoleSpyFindings,
+} from "./test-hygiene-rules.mjs";
+
+export {
+  EXTRA_RULES,
+  RULE_HINTS,
+  browserFixedSleepFindings,
+  classNameSplitFindings,
+  collapseSnippet,
+  computedStyleSpyFindings,
+  cssFileReadFindings,
+  enclosingScope,
+  findDeclarationScope,
+  findMatchingClose,
+  inlineBrowserMockFindings,
+  lineAt,
+  maskJs,
+  parseCallArgs,
+  scanExtraSource,
+  unfilteredConsoleSpyFindings,
+};
+
+export const CORE_RULES = ["fixed-sleep", "timing-assert", "ui-assertion"];
+export const RULES = [...CORE_RULES, ...EXTRA_RULES];
 export const DEFAULTS = {
   baseline: "test-hygiene-baseline.json",
+  extraBaseline: null,
   tests: [
     "**/*.{test,spec}.{js,mjs,cjs,ts,tsx,jsx,mts,cts}", "**/__tests__/**/*.{js,mjs,cjs,ts,tsx,jsx}",
     "test/**/*.{js,mjs,cjs,ts,tsx,py}", "tests/**/*.{js,mjs,cjs,ts,tsx,py,rs,swift}",
@@ -37,6 +79,9 @@ export const DEFAULTS = {
   ],
   exclude: ["**/node_modules/**", "**/dist/**", "**/fixtures/**"],
   perfSuite: ["**/*.perf.{js,mjs,ts,tsx}", "**/perf/**", "**/test_perf_*.py", "**/*.perf.test.*"],
+  browserChecks: ["scripts/check-*.mjs", "scripts/*.browser.mjs", "scripts/lib/*.mjs"],
+  browserExclude: ["**/node_modules/**", "**/dist/**"],
+  mockAdapters: [],
   rules: ["fixed-sleep", "timing-assert"],
 };
 
@@ -502,7 +547,20 @@ export function uiFindings(file, text) {
 
 export function hygieneConfig(config = {}) {
   const own = config.testHygiene ?? {};
-  return { ...DEFAULTS, ...own, rules: own.rules ?? (own.ui ? [...DEFAULTS.rules, "ui-assertion"] : DEFAULTS.rules) };
+  const rules = own.rules ?? (own.ui ? [...DEFAULTS.rules, "ui-assertion"] : DEFAULTS.rules);
+  return {
+    ...DEFAULTS,
+    ...own,
+    baseline: own.baseline ?? DEFAULTS.baseline,
+    extraBaseline: own.extraBaseline ?? DEFAULTS.extraBaseline,
+    tests: own.tests ?? DEFAULTS.tests,
+    exclude: own.exclude ?? DEFAULTS.exclude,
+    perfSuite: own.perfSuite ?? DEFAULTS.perfSuite,
+    browserChecks: own.browserChecks ?? DEFAULTS.browserChecks,
+    browserExclude: own.browserExclude ?? DEFAULTS.browserExclude,
+    mockAdapters: own.mockAdapters ?? DEFAULTS.mockAdapters,
+    rules,
+  };
 }
 
 function listFiles(root) {
@@ -510,27 +568,69 @@ function listFiles(root) {
   return [...new Set(out.split("\0").filter(Boolean))].sort();
 }
 
+const JS_EXTRA_TEST_RULES = new Set([
+  "classname-split",
+  "css-file-read",
+  "unasserted-computed-style-spy",
+  "unfiltered-console-spy",
+  "inline-browser-mock",
+]);
+
 /** Every finding per rule and file, and the perf-helper callers outside the perf suite. */
 export function scan(root, settings, files = listFiles(root)) {
-  const isTest = matcher(settings.tests), excluded = matcher(settings.exclude), inPerfSuite = matcher(settings.perfSuite);
+  const isTest = matcher(settings.tests);
+  const excluded = matcher(settings.exclude);
+  const inPerfSuite = matcher(settings.perfSuite);
+  const isBrowserCheck = matcher(settings.browserChecks ?? DEFAULTS.browserChecks);
+  const browserExcluded = matcher(settings.browserExclude ?? DEFAULTS.browserExclude);
+  const isMockAdapter = matcher(settings.mockAdapters ?? DEFAULTS.mockAdapters);
+
+  const ruleSet = new Set(settings.rules);
+  const wantsBrowserSleep = ruleSet.has("browser-fixed-sleep");
+  const wantsJsExtraTest = [...JS_EXTRA_TEST_RULES].some(rule => ruleSet.has(rule));
+
   const findings = Object.fromEntries(settings.rules.map(rule => [rule, {}]));
   const unrunBudgets = [];
   let scanned = 0;
+
   for (const file of files) {
-    if (!isTest(file) || excluded(file) || !languageOf(file)) continue;
+    const lang = languageOf(file);
+    if (!lang) continue;
+    const matchTest = isTest(file) && !excluded(file);
+    const matchBrowser = wantsBrowserSleep && lang === "js" && isBrowserCheck(file) && !browserExcluded(file);
+    if (!matchTest && !matchBrowser) continue;
+
     const full = path.join(root, file);
     if (!fs.statSync(full, { throwIfNoEntry: false })?.isFile()) continue;
     scanned++;
     const text = fs.readFileSync(full, "utf8");
-    // The perf suite's files run the helper; a raw timing assertion fails there too, as anywhere.
-    const perf = inPerfSuite(file);
     const add = (rule, list) => { if (list.length) findings[rule][file] = list; };
-    if (settings.rules.includes("fixed-sleep")) add("fixed-sleep", sleepFindings(file, text));
-    if (settings.rules.includes("timing-assert")) {
-      add("timing-assert", timingFindings(file, text));
-      if (!perf && callsPerfHelper(file, text)) unrunBudgets.push(file);
+
+    let masked = null;
+    const getMasked = () => (masked ??= maskJs(text));
+
+    if (matchTest) {
+      // The perf suite's files run the helper; a raw timing assertion fails there too, as anywhere.
+      const perf = inPerfSuite(file);
+      if (ruleSet.has("fixed-sleep")) add("fixed-sleep", sleepFindings(file, text));
+      if (ruleSet.has("timing-assert")) {
+        add("timing-assert", timingFindings(file, text));
+        if (!perf && callsPerfHelper(file, text)) unrunBudgets.push(file);
+      }
+      if (ruleSet.has("ui-assertion")) add("ui-assertion", uiFindings(file, text));
+      if (lang === "js" && wantsJsExtraTest) {
+        const m = getMasked();
+        if (ruleSet.has("classname-split")) add("classname-split", classNameSplitFindings(text, m));
+        if (ruleSet.has("css-file-read")) add("css-file-read", cssFileReadFindings(text, m));
+        if (ruleSet.has("unasserted-computed-style-spy")) add("unasserted-computed-style-spy", computedStyleSpyFindings(text, m));
+        if (ruleSet.has("unfiltered-console-spy")) add("unfiltered-console-spy", unfilteredConsoleSpyFindings(text, m));
+        if (ruleSet.has("inline-browser-mock") && !isMockAdapter(file)) add("inline-browser-mock", inlineBrowserMockFindings(text, m));
+      }
     }
-    if (settings.rules.includes("ui-assertion")) add("ui-assertion", uiFindings(file, text));
+
+    if (matchBrowser) {
+      add("browser-fixed-sleep", browserFixedSleepFindings(text, getMasked()));
+    }
   }
   return { findings, unrunBudgets, scanned, files: new Set(files) };
 }
@@ -574,22 +674,76 @@ export function compare(current, baseline, committed = null, existing = null) {
 
 const git = (root, args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 
+/** Strict CLI flag parser for `package-kit test-hygiene`. */
+export function parseHygieneArgs(args = []) {
+  let init = false;
+  let update = false;
+  let warnLowered = false;
+  let base = null;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--init") init = true;
+    else if (arg === "--update") update = true;
+    else if (arg === "--warn-lowered") warnLowered = true;
+    else if (arg === "--base") {
+      const value = args[i + 1];
+      if (!value || value.startsWith("-")) throw new Error("test-hygiene: --base requires a commit ref");
+      base = value;
+      i++;
+    } else if (arg.startsWith("--base=")) {
+      const value = arg.slice("--base=".length);
+      if (!value) throw new Error("test-hygiene: --base= requires a commit ref");
+      base = value;
+    } else {
+      throw new Error(`test-hygiene: unknown option ${arg}`);
+    }
+  }
+  if (init && update) throw new Error("test-hygiene: --init and --update cannot be combined");
+  return { init, update, warnLowered, base };
+}
+
 /**
- * The commit whose baseline this one may not exceed: PACKAGE_KIT_HYGIENE_BASE, or
- * where HEAD left origin's default branch; on that branch itself (a main push
- * in CI, the pre-push check of main) HEAD's parent. HEAD when none is known.
+ * Resolve the commit whose baseline this tree may not exceed.
+ * An explicit non-empty base (`--base`, `PACKAGE_KIT_HYGIENE_BASE`, `PACKAGE_KIT_BASE`) fails loudly when unresolvable.
+ * Otherwise picks the closest merge-base ancestor among `origin/dev`, `origin/HEAD`, `origin/main` (falling back to `HEAD~1` / `HEAD`).
  */
-export function baseCommit(root, env = process.env) {
+export function resolveBaseCommit(root, { baseArg = null, env = process.env } = {}) {
   const tryGit = args => { try { return git(root, args); } catch { return null; } };
-  if (env.PACKAGE_KIT_HYGIENE_BASE) return tryGit(["rev-parse", "--verify", `${env.PACKAGE_KIT_HYGIENE_BASE}^{commit}`]);
+  const nonEmpty = value => (typeof value === "string" && value.length > 0 ? value : null);
+  const explicit = baseArg !== null && baseArg !== undefined
+    ? baseArg
+    : (nonEmpty(env.PACKAGE_KIT_HYGIENE_BASE) ?? nonEmpty(env.PACKAGE_KIT_BASE));
+  if (explicit !== null) {
+    const resolved = tryGit(["rev-parse", "--verify", "--end-of-options", `${explicit}^{commit}`]);
+    if (!resolved) throw new Error(`test-hygiene: cannot resolve base commit ${JSON.stringify(explicit)}`);
+    return resolved;
+  }
   const head = tryGit(["rev-parse", "--verify", "HEAD"]);
   if (!head) return null;
-  for (const ref of ["origin/HEAD", "origin/main"]) {
+
+  let bestBase = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const ref of ["origin/dev", "origin/HEAD", "origin/main"]) {
     const base = tryGit(["merge-base", "HEAD", ref]);
     if (!base) continue;
-    return base === head ? tryGit(["rev-parse", "--verify", "HEAD~1"]) ?? head : base;
+    const distance = Number(tryGit(["rev-list", "--count", `${base}..HEAD`]) ?? Number.POSITIVE_INFINITY);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestBase = base;
+    }
   }
-  return head;
+  if (!bestBase) return head;
+  return bestBase === head ? (tryGit(["rev-parse", "--verify", "HEAD~1"]) ?? head) : bestBase;
+}
+
+/** Backwards-compatible baseCommit helper delegating to resolveBaseCommit. */
+export function baseCommit(root, env = process.env) {
+  try {
+    return resolveBaseCommit(root, { env });
+  } catch {
+    return null;
+  }
 }
 
 function committedBaseline(root, file, commit) {
@@ -604,11 +758,25 @@ function committedBaseline(root, file, commit) {
 
 const writeBaseline = (file, rules) => fs.writeFileSync(file, `${JSON.stringify({ version: 1, rules }, null, 2)}\n`);
 
+function sliceObject(obj, keys) {
+  const out = {};
+  for (const key of keys) if (Object.hasOwn(obj, key)) out[key] = obj[key];
+  return out;
+}
+
 export function runTestHygiene({ root, config = {}, args = [], env = process.env, print = console.log, printError = console.error }) {
+  let parsed;
+  try {
+    parsed = parseHygieneArgs(args);
+  } catch (error) {
+    printError(error.message);
+    return 1;
+  }
+
   const settings = hygieneConfig(config);
   const unknown = settings.rules.filter(rule => !RULES.includes(rule));
   if (unknown.length) return printError(`test-hygiene: unknown rules ${unknown.join(", ")}; known: ${RULES.join(", ")}`), 1;
-  const baselineFile = path.join(root, settings.baseline);
+
   const { findings, unrunBudgets, scanned, files } = scan(root, settings);
   const current = counts(findings);
   let failed = false;
@@ -617,34 +785,93 @@ export function runTestHygiene({ root, config = {}, args = [], env = process.env
     failed = true;
   }
 
-  if (args.includes("--init")) {
-    if (fs.existsSync(baselineFile)) return printError(`test-hygiene: ${settings.baseline} exists; use --update to lower it`), 1;
-    writeBaseline(baselineFile, current);
-    const total = Object.values(current).reduce((sum, files) => sum + Object.values(files).reduce((a, b) => a + b, 0), 0);
-    print(`test-hygiene: wrote ${settings.baseline} with ${total} findings in ${scanned} test files; they may only shrink`);
+  // Partition rules into one or two baseline files when `extraBaseline` is configured.
+  const groups = [];
+  if (settings.extraBaseline) {
+    const core = settings.rules.filter(rule => CORE_RULES.includes(rule));
+    const extra = settings.rules.filter(rule => EXTRA_RULES.includes(rule));
+    if (core.length) groups.push({ name: settings.baseline, rules: core });
+    if (extra.length) groups.push({ name: settings.extraBaseline, rules: extra });
+  } else {
+    groups.push({ name: settings.baseline, rules: settings.rules });
+  }
+
+  if (parsed.init) {
+    for (const group of groups) {
+      const baselineFile = path.join(root, group.name);
+      if (fs.existsSync(baselineFile)) {
+        printError(`test-hygiene: ${group.name} exists; use --update to lower it`);
+        return 1;
+      }
+    }
+    for (const group of groups) {
+      const groupCurrent = sliceObject(current, group.rules);
+      writeBaseline(path.join(root, group.name), groupCurrent);
+      const total = Object.values(groupCurrent).reduce((sum, map) => sum + Object.values(map).reduce((a, b) => a + b, 0), 0);
+      print(`test-hygiene: wrote ${group.name} with ${total} findings in ${scanned} test files; they may only shrink`);
+    }
     return failed ? 1 : 0;
   }
-  const baseline = fs.existsSync(baselineFile) ? JSON.parse(fs.readFileSync(baselineFile, "utf8")).rules ?? {} : {};
-  const committed = committedBaseline(root, settings.baseline, baseCommit(root, env));
-  const { problems, stale, lowered } = compare(current, baseline, committed, files);
-  if (args.includes("--update")) {
-    writeBaseline(baselineFile, lowered);
-    for (const { rule, file, count, limit } of stale) print(`test-hygiene: lowered ${rule} ${file} ${limit} -> ${count}`);
-  } else if (stale.length) {
-    for (const { rule, file, count, limit } of stale) printError(`test-hygiene: ${rule} in ${file} went down to ${count} (baseline ${limit}); run package-kit test-hygiene --update to lower the baseline`);
-    failed = true;
+
+  let baseSha;
+  try {
+    baseSha = resolveBaseCommit(root, { baseArg: parsed.base, env });
+  } catch (error) {
+    printError(error.message);
+    return 1;
   }
-  for (const { rule, file, count, limit, raised } of problems) {
-    if (raised) {
-      printError(`test-hygiene: ${settings.baseline} raises ${rule} for ${file} to ${count} (the base has ${limit}); the baseline may only shrink`);
+
+  const allProblems = [];
+  const allStale = [];
+  for (const group of groups) {
+    const baselineFile = path.join(root, group.name);
+    const baseline = fs.existsSync(baselineFile) ? JSON.parse(fs.readFileSync(baselineFile, "utf8")).rules ?? {} : {};
+    const committed = committedBaseline(root, group.name, baseSha);
+    const groupCurrent = sliceObject(current, group.rules);
+    const { problems, stale, lowered } = compare(groupCurrent, baseline, committed, files);
+    const hasRaised = problems.some(problem => problem.raised);
+
+    if (parsed.update) {
+      if (!hasRaised) {
+        writeBaseline(baselineFile, lowered);
+        for (const { rule, file, count, limit } of stale) print(`test-hygiene: lowered ${rule} ${file} ${limit} -> ${count}`);
+      }
     } else {
+      for (const entry of stale) allStale.push(entry);
+    }
+    for (const problem of problems) allProblems.push({ ...problem, baselineName: group.name });
+  }
+
+  const failedRules = new Set();
+  for (const { rule, file, count, limit, raised, baselineName } of allProblems) {
+    if (raised) {
+      printError(`test-hygiene: ${baselineName} raises ${rule} for ${file} to ${count} (the base has ${limit}); the baseline may only shrink`);
+    } else {
+      failedRules.add(rule);
       printError(`test-hygiene: ${rule} in ${file}: ${count} findings, baseline allows ${limit}:`);
       for (const { line, text } of findings[rule][file]) printError(`  ${file}:${line}: ${text}`);
     }
     failed = true;
   }
-  if (problems.some(({ rule, raised }) => rule === "fixed-sleep" && !raised)) printError("Wait for the condition instead (an event, a poll with a deadline), or mark a wait that must be fixed with `sleep-ok: <reason>`.");
-  if (problems.some(({ rule, raised }) => rule === "timing-assert" && !raised)) printError(`Move a budget into the perf helper (perfBudget / perf_budget), give a functional deadline a bound of at least ${FLOOR_SECONDS} s, or a tighter one a \`load-tolerant: <why>\` comment.`);
+
+  if (allStale.length) {
+    const staleLines = allStale.map(
+      ({ rule, file, count, limit }) => `test-hygiene: ${rule} in ${file} went down to ${count} (baseline ${limit}); run package-kit test-hygiene --update to lower the baseline`,
+    );
+    if (parsed.warnLowered && !failed) {
+      printError(`WARNING ${staleLines.length} test-hygiene counts are lower than the baseline; the next lane check fails until a lane runs package-kit test-hygiene --update:`);
+      for (const line of staleLines) printError(`  ${line}`);
+    } else {
+      for (const line of staleLines) printError(line);
+      failed = true;
+    }
+  }
+
+  if (failedRules.has("fixed-sleep")) printError("Wait for the condition instead (an event, a poll with a deadline), or mark a wait that must be fixed with `sleep-ok: <reason>`.");
+  if (failedRules.has("timing-assert")) printError(`Move a budget into the perf helper (perfBudget / perf_budget), give a functional deadline a bound of at least ${FLOOR_SECONDS} s, or a tighter one a \`load-tolerant: <why>\` comment.`);
+  for (const rule of failedRules) {
+    if (RULE_HINTS[rule]) printError(RULE_HINTS[rule]);
+  }
   if (!failed) print(`test-hygiene: ok (${settings.rules.join(", ")}; ${scanned} test files)`);
   return failed ? 1 : 0;
 }

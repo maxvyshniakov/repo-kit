@@ -21,6 +21,7 @@
     "./release": "./src/release.mjs",
     "./serve": "./src/serve.mjs",
     "./shoot": "./src/shoot.mjs",
+    "./test-hygiene": "./src/test-hygiene.mjs",
     "./friction-contract.json": "./friction-contract.json",
     "./package.json": "./package.json",
     "./safari-background": "./src/safari-background/index.mjs"

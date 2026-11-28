@@ -66,7 +66,10 @@ export const CONFIG_KEYS = {
     "rules", "exclude", "unit", "lines", "bytes", "max", "limit", "glob", "globs", "include",
     "allowlist", "baseline", "exemptions", "excludeLockfiles", "excludeChangelogs", "excludeBinary",
   ],
-  testHygiene: ["baseline", "tests", "exclude", "perfSuite", "rules", "ui"],
+  testHygiene: [
+    "baseline", "extraBaseline", "tests", "exclude", "perfSuite",
+    "browserChecks", "browserExclude", "mockAdapters", "rules", "ui",
+  ],
 };
 
 /** The keys of each publish.notify target. */

@@ -5,7 +5,23 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { callsPerfHelper, globRegExp, runTestHygiene, sleepFindings, timingFindings, uiFindings } from "../src/test-hygiene.mjs";
+import {
+  browserFixedSleepFindings,
+  callsPerfHelper,
+  classNameSplitFindings,
+  computedStyleSpyFindings,
+  cssFileReadFindings,
+  globRegExp,
+  inlineBrowserMockFindings,
+  maskJs,
+  parseHygieneArgs,
+  resolveBaseCommit,
+  runTestHygiene,
+  sleepFindings,
+  timingFindings,
+  uiFindings,
+  unfilteredConsoleSpyFindings,
+} from "../src/test-hygiene.mjs";
 import { isolatedGitEnv, kitRoot } from "./fixtures.mjs";
 
 const lines = list => list.map(({ line }) => line);
@@ -284,4 +300,297 @@ test("package-kit test-hygiene runs in a repository without package-kit.config.m
   const check = spawnSync(process.execPath, [cli, "test-hygiene"], { cwd: repo.root, encoding: "utf8" });
   assert.equal(check.status, 1);
   assert.match(check.stderr, /tests\/test_b\.py:2: time\.sleep\(2\)/);
+});
+
+test("maskJs preserves exact length/newlines across JSX apostrophes, templates, comments and division vs regex", () => {
+  const src = [
+    "const jsx = <p>Don't break / the rest</p>;",
+    "const half = width! / 2 + count++ / 2 + obj.return / 2;",
+    "const fn = () => /foo\\/bar/gi;",
+    "const tpl = `hello ${el.className.split(' ')} world`;",
+    "// el.className.split(' ')",
+    "/* multi\nline */ el.className.split(' ');",
+  ].join("\n");
+  const { noComments, codeOnly } = maskJs(src);
+  assert.equal(noComments.length, src.length);
+  assert.equal(codeOnly.length, src.length);
+  assert.equal(noComments.split("\n").length, src.split("\n").length);
+  assert.equal(codeOnly.split("\n").length, src.split("\n").length);
+  assert.doesNotMatch(noComments, /multi/);
+  assert.match(codeOnly, /el\.className\.split/);
+  assert.equal(lines(classNameSplitFindings(src, { noComments, codeOnly })).length, 2);
+});
+
+test("classname-split catches direct, optional, trimmed and fallback splits while ignoring comments and strings", () => {
+  const text = [
+    'const parts = el.className.split(" ");',
+    'const trimmed = el?.className?.trim().split(/\\s+/);',
+    'const fb = (el.className ?? "").split(" ");',
+    "const fb2 = (el.className || '').trim().split(' ');",
+    'const ok = label.split(" ");',
+    '// el.className.split(" ");',
+    'const s = "el.className.split(\' \')";',
+  ].join("\n");
+  assert.deepEqual(lines(classNameSplitFindings(text)), [1, 2, 3, 4]);
+});
+
+test("css-file-read catches direct reads, tracked variables, loops, helpers and readDataGridCss()", () => {
+  const text = [
+    'const a = readFileSync("src/tokens.css", "utf8");',
+    'const cssPath = path.join(dir, "theme.css");',
+    'const b = readFileSync(cssPath, "utf8");',
+    'const json = readFileSync("package.json", "utf8");',
+    'const cssFiles = readdirSync(dir).filter(f => f.endsWith(".css"));',
+    'for (const f of cssFiles) { readFileSync(f, "utf8"); }',
+    'cssFiles.map(f => readFileSync(f, "utf8"));',
+    'const loadFile = p => readFileSync(p, "utf8");',
+    'const c = loadFile("styles/base.css");',
+    'const d = loadFile("README.md");',
+    'const e = readDataGridCss();',
+    'function readDataGridCss() { return ""; }',
+  ].join("\n");
+  assert.deepEqual(lines(cssFileReadFindings(text)), [1, 3, 6, 7, 9, 11]);
+});
+
+test("unasserted-computed-style-spy flags unasserted or zero-call spies and allows positive assertions", () => {
+  const text = [
+    'describe("a", () => {',
+    '  it("unasserted", () => {',
+    '    const spy = vi.spyOn(window, "getComputedStyle").mockReturnValue({} as CSSStyleDeclaration);',
+    '    expect(true).toBe(true);',
+    '  });',
+    '  it("negated only", () => {',
+    '    const spy = vi.spyOn(globalThis, "getComputedStyle");',
+    '    expect(spy).not.toHaveBeenCalled();',
+    '  });',
+    '  it("zero times", () => {',
+    '    const spy = vi.spyOn(window, "getComputedStyle");',
+    '    expect(spy).toHaveBeenCalledTimes(0);',
+    '  });',
+    '  it("positive toHaveBeenCalled", () => {',
+    '    const spy = vi.spyOn(window, "getComputedStyle");',
+    '    expect(spy).toHaveBeenCalled();',
+    '  });',
+    '  it("positive filter helper", () => {',
+    '    const spy = vi.spyOn(window, "getComputedStyle");',
+    '    const hits = () => spy.mock.calls.filter(Boolean).length;',
+    '    expect(hits()).toBeGreaterThan(0);',
+    '  });',
+    '  it("positive calls toEqual", () => {',
+    '    const spy = vi.spyOn(window, "getComputedStyle");',
+    '    expect(spy.mock.calls).toEqual([[el]]);',
+    '  });',
+    '});',
+  ].join("\n");
+  assert.deepEqual(lines(computedStyleSpyFindings(text)), [3, 7, 11]);
+});
+
+test("browser-fixed-sleep catches direct, wrapper (pause/sleep/wait) and string-eval sleeps while respecting exemptions", () => {
+  const text = [
+    'import { wait } from "./helpers.mjs";',
+    'const pause = ms => new Promise(resolve => setTimeout(resolve, ms));',
+    'function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }',
+    'const PROBE = `const x = 1;\nreturn new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, arguments[1])));`;',
+    'await page.waitForTimeout(500);',
+    'await new Promise(resolve => setTimeout(resolve, 400));',
+    'await new Promise(resolve => setTimeout(resolve, 0));', // macrotask yield: allowed
+    'await pause(250);',
+    'await pause(0);', // zero yield: allowed
+    'await sleep(100);',
+    'await wait(200);',
+    'browser("eval", "new Promise(resolve => setTimeout(resolve, 400))");',
+    'await client.page("scrollTo(0, 3000); return new Promise(resolve => setTimeout(resolve, 1500));");',
+    'await client.page(PROBE, ["rgb(0,0,0)", 400]);',
+    'browser("eval", "new Promise(resolve => requestAnimationFrame(resolve))");', // rAF only: allowed
+    'setTimeout(() => { failed = true; }, 3000);', // unpaired timeout: flagged
+    'function withWatchdog() {',
+    '  const id = setTimeout(() => { throw new Error("timeout"); }, 3000);',
+    '  clearTimeout(id);',
+    '}',
+    '// sleep-ok: Linux headless_shell long-press hold requires 520ms',
+    'await new Promise(resolve => setTimeout(resolve, 520));',
+    'await pause(140); // sleep-ok: negative proof window for hover tooltip',
+    'await page.evaluate("await page.waitForTimeout(100)");',
+  ].join("\n");
+  assert.deepEqual(lines(browserFixedSleepFindings(text)), [6, 7, 9, 11, 12, 13, 14, 15, 17, 25]);
+});
+
+test("unfiltered-console-spy allows not.toHaveBeenCalled() and exhaustive assertions, flags unfiltered/subset/beforeEach spies", () => {
+  const text = [
+    'describe("allowed", () => {',
+    '  it("not.toHaveBeenCalled", () => {',
+    '    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);',
+    '    expect(warn).not.toHaveBeenCalled();',
+    '  });',
+    '  it("toHaveBeenCalledTimes(0)", () => {',
+    '    const err = vi.spyOn(console, "error").mockImplementation(() => {});',
+    '    expect(err).toHaveBeenCalledTimes(0);',
+    '  });',
+    '  it("exact count + positive args", () => {',
+    '    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});',
+    '    expect(warn).toHaveBeenCalledTimes(1);',
+    '    expect(warn).toHaveBeenCalledWith("expected");',
+    '  });',
+    '  it("calledOnce + nthCalledWith", () => {',
+    '    const err = vi.spyOn(console, "error").mockImplementation(() => {});',
+    '    expect(err).toHaveBeenCalledOnce();',
+    '    expect(err).toHaveBeenNthCalledWith(1, "boom");',
+    '  });',
+    '  it("exhaustive mock.calls equality", () => {',
+    '    const err = vi.spyOn(console, "error").mockImplementation(() => {});',
+    '    expect(err.mock.calls).toEqual([["only this"]]);',
+    '  });',
+    '  it("non-suppressing spy", () => {',
+    '    const err = vi.spyOn(console, "error");',
+    '    expect(err).toHaveBeenCalledWith("x");',
+    '  });',
+    '});',
+    'describe("beforeEach verified in afterEach", () => {',
+    '  let consoleError;',
+    '  beforeEach(() => {',
+    '    consoleError = vi.spyOn(console, "error").mockImplementation(() => {});',
+    '  });',
+    '  afterEach(() => {',
+    '    expect(consoleError).not.toHaveBeenCalled();',
+    '    consoleError.mockRestore();',
+    '  });',
+    '});',
+    'describe("flagged", () => {',
+    '  let consoleError;',
+    '  beforeEach(() => {',
+    '    consoleError = vi.spyOn(console, "error").mockImplementation(() => {});',
+    '  });',
+    '  afterEach(() => {',
+    '    consoleError.mockRestore();',
+    '  });',
+    '  it("subset filter only", () => {',
+    '    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);',
+    '    expect(iconOnlyWarnings(warn)).toHaveLength(1);',
+    '  });',
+    '  it("negated substring only", () => {',
+    '    const err = vi.spyOn(console, "error").mockImplementation(() => {});',
+    '    expect(err.mock.calls.flat().join(" ")).not.toContain("pendingAnnouncement");',
+    '  });',
+    '  it("negated toHaveBeenCalledWith", () => {',
+    '    const err = vi.spyOn(console, "error").mockImplementation(() => {});',
+    '    expect(err).not.toHaveBeenCalledWith("bad");',
+    '  });',
+    '  it("count without args", () => {',
+    '    const err = vi.spyOn(console, "error").mockImplementation(() => {});',
+    '    expect(err).toHaveBeenCalledTimes(1);',
+    '  });',
+    '  it("anonymous suppressing spy", () => {',
+    '    vi.spyOn(console, "error").mockImplementation(() => {});',
+    '  });',
+    '});',
+  ].join("\n");
+  assert.deepEqual(lines(unfilteredConsoleSpyFindings(text)), [42, 48, 52, 56, 60, 64]);
+});
+
+test("inline-browser-mock flags ResizeObserver/matchMedia stubs, defineProperty, spyOn, assignments and classes, allows restores", () => {
+  const text = [
+    'const originalResizeObserver = globalThis.ResizeObserver;',
+    'vi.stubGlobal("matchMedia", vi.fn());',
+    'vi.stubGlobal("ResizeObserver", class {});',
+    'Object.defineProperty(window,\n  "matchMedia", { value: vi.fn() });',
+    'vi.spyOn(window, "matchMedia").mockImplementation(() => ({}));',
+    'window.matchMedia = () => ({});',
+    'class MockResizeObserver { observe() {} }',
+    'globalThis.ResizeObserver = MockResizeObserver;',
+    'globalThis.ResizeObserver = originalResizeObserver;', // restoration: allowed
+    'vi.stubGlobal("fetch", vi.fn());', // unrelated global: allowed
+  ].join("\n");
+  assert.deepEqual(lines(inlineBrowserMockFindings(text)), [2, 3, 4, 6, 7, 8, 9]);
+});
+
+test("--base, --warn-lowered, extraBaseline, browserChecks/browserExclude and mockAdapters work end-to-end", async () => {
+  const repo = repository({
+    "test/a.test.tsx": [
+      'expect(el.className.split(" ")).toContain("a");',
+      'vi.stubGlobal("matchMedia", vi.fn());',
+    ].join("\n") + "\n",
+    "test/adapters/media.test.ts": 'vi.stubGlobal("matchMedia", vi.fn());\n',
+    "scripts/check-demo.mjs": 'await new Promise(resolve => setTimeout(resolve, 200));\n',
+    "scripts/safari-real-bounce/manual.mjs": 'await new Promise(resolve => setTimeout(resolve, 500));\n',
+  });
+  const config = {
+    testHygiene: {
+      rules: [
+        "fixed-sleep",
+        "timing-assert",
+        "classname-split",
+        "browser-fixed-sleep",
+        "unfiltered-console-spy",
+        "inline-browser-mock",
+      ],
+      extraBaseline: "test-hygiene-extra-baseline.json",
+      browserChecks: ["scripts/check-*.mjs", "scripts/safari-real-bounce/**"],
+      browserExclude: ["scripts/safari-real-bounce/**"],
+      mockAdapters: ["test/adapters/**"],
+    },
+  };
+
+  const init = run(repo.root, ["--init"], config);
+  assert.equal(init.code, 0, init.err);
+  const coreBase = JSON.parse(fs.readFileSync(path.join(repo.root, "test-hygiene-baseline.json"), "utf8"));
+  const extraBase = JSON.parse(fs.readFileSync(path.join(repo.root, "test-hygiene-extra-baseline.json"), "utf8"));
+  assert.deepEqual(coreBase.rules, { "fixed-sleep": {}, "timing-assert": {} });
+  assert.deepEqual(extraBase.rules, {
+    "classname-split": { "test/a.test.tsx": 1 },
+    "browser-fixed-sleep": { "scripts/check-demo.mjs": 1 },
+    "unfiltered-console-spy": {},
+    "inline-browser-mock": { "test/a.test.tsx": 1 },
+  });
+  repo.commit();
+  const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo.root, encoding: "utf8" }).trim();
+  repo.git("update-ref", "refs/remotes/origin/main", "HEAD");
+  repo.git("update-ref", "refs/remotes/origin/dev", "HEAD");
+
+  // Lowering a count fails normally, passes with warning under --warn-lowered.
+  write(repo.root, { "scripts/check-demo.mjs": "await waitFor(() => ready);\n" });
+  const loweredFail = run(repo.root, [], config);
+  assert.equal(loweredFail.code, 1);
+  assert.match(loweredFail.err, /browser-fixed-sleep in scripts\/check-demo\.mjs went down to 0 \(baseline 1\)/);
+
+  const loweredWarn = run(repo.root, ["--warn-lowered"], config);
+  assert.equal(loweredWarn.code, 0, loweredWarn.err);
+  assert.match(loweredWarn.err, /WARNING 1 test-hygiene counts are lower/);
+
+  // Raising a baseline entry on a branch fails against --base <sha>, even with --warn-lowered.
+  repo.git("switch", "-q", "-c", "topic");
+  write(repo.root, {
+    "scripts/check-demo.mjs": 'await new Promise(resolve => setTimeout(resolve, 200));\nawait pause(300);\n',
+    "test-hygiene-extra-baseline.json": JSON.stringify({
+      version: 1,
+      rules: { ...extraBase.rules, "browser-fixed-sleep": { "scripts/check-demo.mjs": 2 } },
+    }, null, 2) + "\n",
+  });
+  repo.commit();
+  const raised = run(repo.root, ["--base", baseSha, "--warn-lowered"], config);
+  assert.equal(raised.code, 1);
+  assert.match(raised.err, /test-hygiene-extra-baseline\.json raises browser-fixed-sleep for scripts\/check-demo\.mjs to 2 \(the base has 1\)/);
+
+  // Invalid --base fails loudly.
+  const badBase = run(repo.root, ["--base=refs/does-not-exist"], config);
+  assert.equal(badBase.code, 1);
+  assert.match(badBase.err, /cannot resolve base commit/);
+
+  // Closer origin/dev wins over older origin/main in resolveBaseCommit.
+  repo.git("update-ref", "refs/remotes/origin/dev", "HEAD");
+  write(repo.root, { "test/b.test.ts": "export const x = 1;\n" });
+  repo.commit();
+  const devSha = execFileSync("git", ["rev-parse", "origin/dev"], { cwd: repo.root, encoding: "utf8" }).trim();
+  assert.equal(resolveBaseCommit(repo.root), devSha);
+
+  // parseHygieneArgs rejects invalid combinations/flags.
+  assert.throws(() => parseHygieneArgs(["--init", "--update"]), /cannot be combined/);
+  assert.throws(() => parseHygieneArgs(["--base"]), /requires a commit ref/);
+  assert.throws(() => parseHygieneArgs(["--bogus"]), /unknown option/);
+
+  // Subpath export @maxvyshniakov/package-kit/test-hygiene resolves cleanly.
+  const exported = await import("@maxvyshniakov/package-kit/test-hygiene");
+  assert.equal(typeof exported.maskJs, "function");
+  assert.equal(typeof exported.browserFixedSleepFindings, "function");
+  assert.equal(typeof exported.unfilteredConsoleSpyFindings, "function");
+  assert.equal(typeof exported.inlineBrowserMockFindings, "function");
 });

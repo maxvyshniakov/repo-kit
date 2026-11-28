@@ -15,7 +15,8 @@ const USAGE = `Usage: package-kit <command>
                                    HTTP/1.1 Keep-Alive static preview server
   checks                           run PACKAGE_KIT_CHECKS' list of {name, run} in order, as browser.yml does
   verified-tree                    in a workflow: link each PACKAGE_KIT_PLANS plan to a passed result of this tree
-  test-hygiene [--init|--update]   shrink-only test rules: fixed sleeps, timing assertions, UI assertions (opt-in)
+  test-hygiene [--init|--update] [--base REF] [--warn-lowered]
+                                   shrink-only test rules: fixed sleeps, timing assertions, UI/CSS/DOM/console/mock rules
   file-budget [--staged] [--all] [--init|--update] [--json]
                                    per-glob file-size budgets (lines or bytes) and a shrink-only allowlist
   hooks <install|sync|check|status>

@@ -4,6 +4,11 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+### Added
+
+- Export `@maxvyshniakov/package-kit/test-hygiene` (`src/test-hygiene.mjs`) with unified JS/TS lexical masking (`maskJs`) and consolidated shrink-only rules: `classname-split`, `css-file-read`, `unasserted-computed-style-spy`, `browser-fixed-sleep`, `unfiltered-console-spy`, and `inline-browser-mock` (Refs #28).
+- Support `--base <ref>` (with closest merge-base resolution across `origin/dev`, `origin/HEAD`, and `origin/main`), `--warn-lowered`, and `testHygiene.{extraBaseline,browserChecks,browserExclude,mockAdapters}` in `package-kit test-hygiene` (Refs #28).
+
 ## 1.1.0 - 2026-11-27
 
 ### Added
