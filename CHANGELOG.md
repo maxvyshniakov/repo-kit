@@ -4,6 +4,10 @@ Versions and release rules: [README.md](README.md#versioning).
 
 ## Unreleased
 
+### Fixed
+
+- `test-hygiene`: permit newly adopted rules whose key is absent from the committed base baseline file, instead of flagging their initial entries as raises from `0`.
+
 ## 1.2.0 - 2026-11-28
 
 ### Added

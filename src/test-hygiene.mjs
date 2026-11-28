@@ -660,7 +660,7 @@ export function compare(current, baseline, committed = null, existing = null) {
       const count = now[file] ?? 0;
       if (count < limit) stale.push({ rule, file, count, limit });
     }
-    if (committed) {
+    if (committed && Object.hasOwn(committed, rule)) {
       const before = committed[rule] ?? {};
       const raised = Object.entries(allowed).filter(([file, limit]) => limit > (before[file] ?? 0));
       const moved = Object.entries(before).filter(([file]) => existing && !existing.has(file))

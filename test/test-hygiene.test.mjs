@@ -736,3 +736,45 @@ test("inline-browser-mock catches TS casts and bracket access, scopes savedOrigi
   ].join("\n");
   assert.deepEqual(lines(inlineBrowserMockFindings(text)), [3, 4, 5, 6, 10, 12, 18]);
 });
+
+test("runTestHygiene permits newly adopted rules absent from the committed baseline", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pk-hygiene-adopt-"));
+  const env = isolatedGitEnv();
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir, env });
+    fs.mkdirSync(path.join(dir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "src/sample.test.ts"), "vi.stubGlobal('matchMedia', () => ({}));\n");
+    fs.writeFileSync(
+      path.join(dir, "test-hygiene-extra-baseline.json"),
+      JSON.stringify({ version: 1, rules: { "classname-split": {} } }, null, 2) + "\n",
+    );
+    execFileSync("git", ["add", "."], { cwd: dir, env });
+    execFileSync("git", ["commit", "-q", "-m", "initial"], { cwd: dir, env });
+
+    fs.writeFileSync(
+      path.join(dir, "test-hygiene-extra-baseline.json"),
+      JSON.stringify({
+        version: 1,
+        rules: { "classname-split": {}, "inline-browser-mock": { "src/sample.test.ts": 1 } },
+      }, null, 2) + "\n",
+    );
+    const errors = [];
+    const code = runTestHygiene({
+      root: dir,
+      config: {
+        testHygiene: {
+          baseline: "test-hygiene-extra-baseline.json",
+          rules: ["classname-split", "inline-browser-mock"],
+          globs: ["src/*.test.ts"],
+        },
+      },
+      args: ["--base", "HEAD"],
+      env,
+      print: () => {},
+      printError: msg => errors.push(msg),
+    });
+    assert.equal(code, 0, errors.join("\n"));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
