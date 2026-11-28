@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   check:
-    uses: maxvyshniakov/package-kit/.github/workflows/verify.yml@v1.2.0
+    uses: maxvyshniakov/package-kit/.github/workflows/verify.yml@v1.2.1
     permissions:
       contents: read
       packages: read
@@ -45,5 +45,5 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
-      - uses: maxvyshniakov/package-kit/actions/setup-bun@v1.2.0
-      - uses: maxvyshniakov/package-kit/actions/npm-publish@v1.2.0
+      - uses: maxvyshniakov/package-kit/actions/setup-bun@v1.2.1
+      - uses: maxvyshniakov/package-kit/actions/npm-publish@v1.2.1
